@@ -18,6 +18,7 @@ const (
 	TypeListener = "listener"
 	TypeClose    = "close"
 	TypeConn     = "conn"
+	TypeAuth   = "auth"
 	TypeUnknown  = "unknown"
 )
 

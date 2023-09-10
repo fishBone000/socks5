@@ -1,14 +1,25 @@
 package s5i
 
 import (
+	"errors"
 	"io"
+	"reflect"
+)
+
+const (
+  VerUsrPwd byte = 0x01 // VER byte of the Username/Password Auth
+  UsrPwdStatSuccess
+)
+
+var (
+  ErrAuthFailed = errors.New("auth failed")
 )
 
 // A Subnegotiator does subnegotiation after an auth method has been chosen.
 type Subnegotiator interface {
   // When subnegotiation begins, the server interface will pass net.Conn to 
-  // this func. Negotiate() should return Capsulator upon finish, or error if
-  // any. 
+  // this func. Implementation should keep the ReadWriter for capsulation use. 
+  // If nil Capsulator is returned, NoCap is used instead. 
   // Connection is closed if non-nil error is returned. 
   Negotiate(io.ReadWriter) (Capsulator, error)
 }
@@ -24,7 +35,7 @@ type Capsulator interface {
   DecapPacket(p []byte) ([]byte, error)
 }
 
-// Subnegotiator for NO AUTHENTICATION. 
+// Subnegotiator for auth method NO AUTHENTICATION. 
 type NoAuthSubneg struct {}
 
 func (n NoAuthSubneg) Negotiate(rw io.ReadWriter) (Capsulator, error) {
@@ -56,4 +67,52 @@ func (c NoCap) DecapPacket(p []byte) ([]byte, error) {
   q := make([]byte, len(p))
   copy(q, p)
   return q, nil
+}
+
+// Subnegotiator for Username/Password Authentication, implements RFC 1929. 
+type UsrPwdSubneg struct {
+  // List of username password pair. 
+  // A list entry is to be ignored if its number of elements is not 2. 
+  List [][]byte 
+}
+
+func (n UsrPwdSubneg) Negotiate(rw io.ReadWriter) (c Capsulator, err error) {
+  var ver byte
+  ver, err = readByte(rw)
+  if err != nil  {
+    return nil, err
+  }
+  if ver != VerUsrPwd {
+    return nil, ErrMalformed
+  }
+
+  var ulen, plen byte
+  var uname, passwd []byte
+  if ulen, err = readByte(rw); err != nil {
+    return nil, err
+  }
+  uname = make([]byte, ulen)
+  if plen, err = readByte(rw); err != nil {
+    return nil, err
+  }
+  passwd = make([]byte, plen)
+
+  reply := []byte{VerUsrPwd, 0x01}
+  for _, pair := range n.List {
+    if len(pair) != 2 {
+      continue
+    }
+    if reflect.DeepEqual(uname, pair[0]) && reflect.DeepEqual(passwd, pair[1]) {
+      reply[1] = UsrPwdStatSuccess
+      break
+    }
+  }
+
+  if _, err = rw.Write(reply); err != nil {
+    return nil, err
+  }
+  if reply[1] != UsrPwdStatSuccess {
+    return nil, ErrAuthFailed
+  }
+  return NoCap{}, nil
 }

@@ -15,3 +15,6 @@ And it does:
 - Attach connection from external code for CONNECT, BIND requests
 - UDP relaying
 - Emitting different types of log entries 
+
+Note:
+- The server interface might emit failed to close conn/listener warnings, even if the cause is the conn/listener has been already closed. 

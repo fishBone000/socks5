@@ -1,8 +1,10 @@
 package s5i
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 )
 
 type closable interface {
@@ -38,4 +40,31 @@ func readByte(reader io.Reader) (byte, error) {
     return 0, err
   }
   return buf[0], nil
+}
+
+func readUInt16BigEndian(reader io.Reader) (uint16, error) {
+  buf := make([]byte, 2)
+  
+  if _, err := fillBuffer(buf, reader); err != nil {
+    return 0, err
+  }
+  return binary.BigEndian.Uint16(buf), nil
+}
+
+func sAddr(c net.Conn) string {
+  laddr := c.LocalAddr()
+  raddr := c.RemoteAddr()
+  var lstr string
+  var rstr string
+  if laddr == nil {
+    lstr = "<unknown>"
+  } else {
+    lstr = laddr.String()
+  }
+  if raddr == nil {
+    rstr = "<unknown>"
+  } else {
+    rstr = raddr.String()
+  }
+  return "S|"+lstr+"<->"+rstr+"|C"
 }

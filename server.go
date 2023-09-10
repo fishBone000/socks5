@@ -2,24 +2,29 @@
 package s5i
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 const (
-	LogChanCap = 64
+  // Channel capacity of all server interface's outgoing channels
+	ChanCap        = 64                             
+  // Time to close connection if auth failed, e.t.c..
+	PeriodCloseErr = time.Second * time.Duration(8) 
 )
 
 type Server struct {
-	addr     *net.TCPAddr
-	listener *net.TCPListener
-
-	mux       sync.Mutex
-	logChan   chan LogEntry
-	started   bool
-	down      bool
-	closables map[closable]struct{}
+	addr       *net.TCPAddr
+	listener   *net.TCPListener
+	mux        sync.Mutex
+	logChan    chan LogEntry
+	hndshkChan chan HandshakeRequest
+	started    bool
+	down       bool
+	closables  map[closable]struct{}
 }
 
 // Starts the server interface. No-op if it was started once.
@@ -99,16 +104,25 @@ func (s *Server) delClosable(c closable) {
 // creates a channel for the server, and then the server can use this channel
 // to send LogEntrys. Any LogEntrys created before the channel creation are
 // discarded.
-// Any LogEntry channel returned by LogChan() is buffered with size of LogChanCap.
+// Any LogEntry channel returned by LogChan() is buffered with size of ChanCap.
 // If the channel returned is full, any LogEntry trying to send through it is
 // disgarded.
 func (s *Server) LogChan() <-chan LogEntry {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if s.logChan == nil {
-		s.logChan = make(chan LogEntry, LogChanCap)
+		s.logChan = make(chan LogEntry, ChanCap)
 	}
 	return (<-chan LogEntry)(s.logChan)
+}
+
+func (s *Server) HandshakeChan() <-chan HandshakeRequest {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if s.hndshkChan == nil {
+		s.hndshkChan = make(chan HandshakeRequest, ChanCap)
+	}
+	return (<-chan HandshakeRequest)(s.hndshkChan)
 }
 
 func (s *Server) listen() {
@@ -126,9 +140,72 @@ func (s *Server) listen() {
 
 		s.regClosable(conn)
 
-    go s.handleNewClient(conn)
+		go s.serveClient(conn)
 	}
 }
 
-func (s *Server) handleNewClient(conn *net.TCPConn) {
+func (s *Server) serveClient(conn *net.TCPConn) {
+	hs, err := readHandshakeRequest(conn)
+	if err != nil {
+		s.err(err, "failed to read handshake ", sAddr(conn))
+	}
+
+	s.selectMethod(hs)
+
+	cp, err := hs.neg.Negotiate(conn)
+	if err != nil {
+		if errors.Is(err, ErrAuthFailed) {
+			s.warn(err, TypeAuth, "subnegotiation failed")
+		} else {
+			s.err(err, TypeConn, "subnegotiation failed")
+		}
+
+    time.AfterFunc(PeriodCloseErr, func() {
+      s.onWarn(conn.Close(), TypeConn, "failed to close connection")
+      s.delClosable(conn)
+    })
+
+		return
+	}
+
+  if cp == nil {
+    cp = NoCap{}
+  }
+
+  req, err := readRequest(cp)
+  if err != nil {
+    s.err(err, "failed to read request ", sAddr(conn))
+    s.onWarn(conn.Close(), TypeConn, "failed to close connection")
+    s.delClosable(conn)
+    return
+  }
+
+}
+
+func (s *Server) selectMethod(r HandshakeRequest) {
+	sent := false
+	r.wg.Add(1)
+	s.mux.Lock()
+	if s.hndshkChan != nil {
+		s.mux.Unlock()
+		select {
+		case s.hndshkChan <- r:
+			sent = true
+			r.wg.Wait()
+		default:
+		}
+	} else {
+		s.mux.Unlock()
+	}
+
+	if !sent {
+		for _, m := range r.methods {
+			switch m {
+			case MethodNoAuth:
+				r.Accept(m, NoAuthSubneg{})
+			default:
+				r.Deny()
+			}
+		}
+	}
 }
