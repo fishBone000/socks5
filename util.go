@@ -7,7 +7,7 @@ import (
 	"net"
 )
 
-type closable interface {
+type closer interface {
   Close() error
 }
 
@@ -52,19 +52,5 @@ func readUInt16BigEndian(reader io.Reader) (uint16, error) {
 }
 
 func sAddr(c net.Conn) string {
-  laddr := c.LocalAddr()
-  raddr := c.RemoteAddr()
-  var lstr string
-  var rstr string
-  if laddr == nil {
-    lstr = "<unknown>"
-  } else {
-    lstr = laddr.String()
-  }
-  if raddr == nil {
-    rstr = "<unknown>"
-  } else {
-    rstr = raddr.String()
-  }
-  return "S|"+lstr+"<->"+rstr+"|C"
+  return fmt.Sprintf("L|%s<->%s|R", c.LocalAddr(), c.RemoteAddr())
 }

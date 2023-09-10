@@ -18,8 +18,9 @@ const (
 	TypeListener = "listener"
 	TypeClose    = "close"
 	TypeConn     = "conn"
-	TypeAuth   = "auth"
+	TypeAuth     = "auth"
 	TypeUnknown  = "unknown"
+	TypeGeneral  = "general"
 )
 
 // SOCKS5 Server Interface outputs LogEntrys which have time stamp, severity, type and corresponding error message.
@@ -65,7 +66,7 @@ func (s *Server) debug(e error, t string, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) onDebug(e error, t string, a ...any) {
+func (s *Server) dbgNonNil(e error, t string, a ...any) {
 	if e != nil {
 		s.debug(e, t, a...)
 	}
@@ -81,7 +82,7 @@ func (s *Server) info(e error, t string, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) onInfo(e error, t string, a ...any) {
+func (s *Server) infoNonNil(e error, t string, a ...any) {
 	if e != nil {
 		s.info(e, t, a...)
 	}
@@ -97,7 +98,7 @@ func (s *Server) warn(e error, t string, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) onWarn(e error, t string, a ...any) {
+func (s *Server) warnNonNil(e error, t string, a ...any) {
 	if e != nil {
 		s.warn(e, t, a...)
 	}
@@ -113,7 +114,7 @@ func (s *Server) err(e error, t string, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) onErr(e error, t string, a ...any) {
+func (s *Server) errNonNil(e error, t string, a ...any) {
 	if e != nil {
 		s.err(e, t, a...)
 	}
