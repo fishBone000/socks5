@@ -51,6 +51,17 @@ func readUInt16BigEndian(reader io.Reader) (uint16, error) {
   return binary.BigEndian.Uint16(buf), nil
 }
 
-func sAddr(c net.Conn) string {
-  return fmt.Sprintf("L|%s<->%s|R", c.LocalAddr(), c.RemoteAddr())
+func addrStr(laddr, raddr net.Addr) string {
+  if laddr == nil && raddr == nil {
+    return ""
+  }
+  s := ""
+  if laddr != nil {
+    s += " " + laddr.String()
+  }
+  s += " ->"
+  if raddr != nil {
+    s += " " + raddr.String()
+  }
+  return s
 }

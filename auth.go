@@ -21,6 +21,8 @@ type Subnegotiator interface {
   // this func. Implementation should keep the ReadWriter for capsulation use. 
   // If nil Capsulator is returned, NoCap is used instead. 
   // Connection is closed if non-nil error is returned. 
+  // S5i will assign LocalAddr and RemoteAddr fields if returned error is 
+  // MalformedError. 
   Negotiate(io.ReadWriter) (Capsulator, error)
 }
 

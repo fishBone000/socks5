@@ -212,7 +212,7 @@ func (r *RequestMsg) add(delta int) {
 }
 
 func (r *RequestMsg) done() {
-  r.wg.Done()
+	r.wg.Done()
 }
 
 func (r *RequestMsg) LocalAddr() net.Addr {
