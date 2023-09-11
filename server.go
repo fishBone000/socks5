@@ -20,7 +20,7 @@ type Server struct {
 	listener    *net.TCPListener
 	mux         sync.Mutex
 	logChan     chan LogEntry
-	hndshkChan  chan *HandshakeRequest
+	hndshkChan  chan *Handshake
 	requestChan chan any
 	started     bool
 	down        bool
@@ -62,7 +62,7 @@ func (s *Server) Close() {
 	defer s.mux.Unlock()
 	s.down = true
 	if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-    s.warn(&OpError{ Op: "close listener", Err: err})
+		s.warn(&OpError{Op: "close listener", Err: err})
 	}
 	delete(s.closers, s.listener)
 }
@@ -75,12 +75,12 @@ func (s *Server) CloseAll() {
 	defer s.mux.Unlock()
 	s.down = true
 	if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		s.warn(&OpError{ Op: "close listener", Err: err })
+		s.warn(&OpError{Op: "close listener", Err: err})
 	}
 	delete(s.closers, s.listener)
 	for c := range s.closers {
 		if err := c.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-      s.warn(&OpError{ Op: "close conn", Err: err })
+			s.warn(&OpError{Op: "close conn", Err: err})
 		}
 		delete(s.closers, c)
 	}
@@ -101,14 +101,14 @@ func (s *Server) delClosable(c closer) {
 func (s *Server) closeCloser(c closer) {
 	err := c.Close()
 	if err != nil && !errors.Is(err, net.ErrClosed) {
-    switch c.(type) {
-    case net.Conn:
-      s.warn(&OpError{ Op: "close conn", Err: err })
-    case net.Listener:
-      s.warn(&OpError{ Op: "close listener", Err: err })
-    default:
-      s.warn(&OpError{ Op: "close", Err: err })
-    }
+		switch c.(type) {
+		case net.Conn:
+			s.warn(&OpError{Op: "close conn", Err: err})
+		case net.Listener:
+			s.warn(&OpError{Op: "close listener", Err: err})
+		default:
+			s.warn(&OpError{Op: "close", Err: err})
+		}
 	}
 	s.delClosable(c)
 }
@@ -127,13 +127,13 @@ func (s *Server) LogChan() <-chan LogEntry {
 // Gets handshake request structs from the server.
 // Handshakes are rejected by closing connection if channel is full or this func
 // is not ever called.
-func (s *Server) HandshakeChan() <-chan *HandshakeRequest {
+func (s *Server) HandshakeChan() <-chan *Handshake {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if s.hndshkChan == nil {
-		s.hndshkChan = make(chan *HandshakeRequest, ChanCap)
+		s.hndshkChan = make(chan *Handshake, ChanCap)
 	}
-	return (<-chan *HandshakeRequest)(s.hndshkChan)
+	return (<-chan *Handshake)(s.hndshkChan)
 }
 
 // Gets channel that receives requests from the Server.
@@ -156,7 +156,7 @@ func (s *Server) listen() {
 			s.mux.Lock()
 			defer s.mux.Unlock()
 			if !s.down {
-        s.err(&OpError{ Op: "listen", Err: err })
+				s.err(&OpError{Op: "listen", Err: err})
 				s.down = true
 			}
 			return
@@ -169,7 +169,7 @@ func (s *Server) listen() {
 }
 
 func (s *Server) serveClient(conn *net.TCPConn) {
-	hs, err := readHandshakeRequest(conn)
+	hs, err := readHandshake(conn)
 	if err != nil {
 		s.err(&OpError{
 			Op:         "read handshake",
@@ -200,17 +200,17 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 			Op:  "subnegotiate",
 			Err: err,
 		}
-    foo := new(net.OpError)
+		foo := new(net.OpError)
 		if errors.As(err, &foo) {
 			s.err(e)
 		} else {
 			e.LocalAddr = conn.LocalAddr()
 			e.RemoteAddr = conn.RemoteAddr()
-      if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrMalformed){
-        s.warn(e)
-      } else {
-        s.err(e)
-      }
+			if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrMalformed) {
+				s.warn(e)
+			} else {
+				s.err(e)
+			}
 		}
 
 		time.AfterFunc(PeriodCloseErr, func() {
@@ -226,7 +226,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 
 	req, err := readRequest(capper)
 	if err != nil {
-    foo := new(net.OpError)
+		foo := new(net.OpError)
 		if errors.As(err, &foo) {
 			s.err(err)
 		} else {
@@ -244,55 +244,81 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	req.laddr = conn.LocalAddr()
 	req.raddr = conn.RemoteAddr()
 	req.once = new(sync.Once)
+	req.wg = new(sync.WaitGroup)
+	req.wg.Add(1)
 
+	var r2 any
+	// Watch out, req is copy assigning to r2!
 	switch req.cmd {
 	case CmdCONNECT:
-		s.handleConnect(&ConnectRequest{
-			RequestMsg: *req,
-		})
-	case CmdBIND:
-		s.handleBind(&BindRequest{
-			RequestMsg: *req,
-		})
-	case CmdASSOC:
-		s.handleAssoc(&AssocRequest{
-			RequestMsg: *req,
-		})
-	default:
-		reply := []byte{
-			VerSOCKS5,
-			RepCmdNotSupported,
-			RSV,
-			ATYPV4,
-			0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00,
+		r2 = &ConnectRequest{
+			Request: *req,
 		}
-
-		s.warn(&OpError{
-			Op:         "serve",
-			LocalAddr:  conn.LocalAddr(),
-			RemoteAddr: conn.RemoteAddr(),
-			Err:        &CmdNotSupportedError{Cmd: req.cmd},
-		})
-		_, err := capper.Write(reply)
-    if err != nil {
-      s.err(&OpError{ Op: "deny request", Err: err })
+	case CmdBIND:
+		r2 = &BindRequest{
+			Request:  *req,
+			bindWg:   new(sync.WaitGroup),
+			bindOnce: new(sync.Once),
+		}
+	case CmdASSOC:
+    var onTerm func(error)
+    terminator := func() error {
+      if onTerm != nil {
+        go onTerm(nil)
+      }
+      return conn.Close()
     }
-
-		time.AfterFunc(PeriodCloseErr, func() {
-			s.closeCloser(conn)
-		})
+		r2 = &AssocRequest{
+			Request:   *req,
+			terminate: terminator,
+      onTermRef: &onTerm,
+		}
 	}
+
+	sent = s.evaluateRequest(r2)
+	if sent {
+		req.wg.Wait()
+	}
+	/*
+				reply := []byte{
+					VerSOCKS5,
+					RepCmdNotSupported,
+					RSV,
+					ATYPV4,
+					0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00,
+				}
+
+				s.warn(&OpError{
+					Op:         "serve",
+					LocalAddr:  conn.LocalAddr(),
+					RemoteAddr: conn.RemoteAddr(),
+					Err:        &CmdNotSupportedError{Cmd: req.cmd},
+				})
+				_, err := capper.Write(reply)
+		    if err != nil {
+		      s.err(&OpError{ Op: "deny request", Err: err })
+		    }
+
+				time.AfterFunc(PeriodCloseErr, func() {
+					s.closeCloser(conn)
+				})
+	*/
 	return
 }
 
-func (s *Server) handleConnect(r *ConnectRequest)
+func (s *Server) handleConnect(r *ConnectRequest) {
+	sent := s.sendRequest(r)
+	if !sent {
+		r.Deny(RepGeneralFailure)
+	}
+}
 
 func (s *Server) handleBind(r *BindRequest)
 
 func (s *Server) handleAssoc(r *AssocRequest)
 
-func (s *Server) selectMethod(r *HandshakeRequest) (sent bool) {
+func (s *Server) selectMethod(r *Handshake) (sent bool) {
 	r.wg.Add(1)
 	s.mux.Lock()
 	if s.hndshkChan != nil {
@@ -309,7 +335,7 @@ func (s *Server) selectMethod(r *HandshakeRequest) (sent bool) {
 	return
 }
 
-func (s *Server) sendRequest(r any) (sent bool) {
+func (s *Server) evaluateRequest(r any) (sent bool) {
 	s.mux.Lock()
 	if s.requestChan != nil {
 		s.mux.Unlock()

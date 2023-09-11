@@ -35,11 +35,6 @@ func (e *LogEntry) Unwrap() error {
 	return e.Err
 }
 
-func (e *LogEntry) withSeverity(severity string) *LogEntry {
-	e.Severity = severity
-	return e
-}
-
 func (s *Server) sendLog(l LogEntry) {
 	if s.logChan == nil {
 		return

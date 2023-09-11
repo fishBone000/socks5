@@ -53,7 +53,7 @@ func (e *CmdNotSupportedError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("CMD %2X not supported")
+	return fmt.Sprintf("CMD 0x%02X not supported", e.Cmd)
 }
 
 type RequestNotHandledError struct {
