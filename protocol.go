@@ -1,10 +1,13 @@
 package s5i
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"sync"
+
+	"github.com/asaskevich/govalidator"
 )
 
 const VerSOCKS5 byte = 0x05 // SOCKS5 VER byte
@@ -55,6 +58,7 @@ const (
 )
 
 // Addr stands for addresses sent in SOCKS5 requests and replies.
+// Does not include port. Does not support concurrency.
 type Addr struct {
 	Type byte // ATYP byte value
 
@@ -63,10 +67,13 @@ type Addr struct {
 	Bytes []byte
 }
 
+var emptyFQDN = &Addr{ Type: ATYPDOMAIN, Bytes: nil }
+const zeroPort uint16 = 0x0000
+
 func readAddr(reader io.Reader) (*Addr, error) {
 	atyp, err := readByte(reader)
 	if err != nil {
-		return &Addr{}, err
+		return nil, err
 	}
 	var content []byte
 	switch atyp {
@@ -77,15 +84,15 @@ func readAddr(reader io.Reader) (*Addr, error) {
 	case ATYPDOMAIN:
 		l, err := readByte(reader)
 		if err != nil {
-			return &Addr{}, err
+			return nil, err
 		}
 		content = make([]byte, l)
 	default:
-		return &Addr{}, ErrMalformed
+		return nil, ErrMalformed
 	}
 	_, err = fillBuffer(content, reader)
 	if err != nil {
-		return &Addr{}, err
+		return nil, err
 	}
 	return &Addr{
 		Type:  atyp,
@@ -93,8 +100,38 @@ func readAddr(reader io.Reader) (*Addr, error) {
 	}, nil
 }
 
+func parseHost(host string) *Addr {
+  ip := net.ParseIP(host)
+  a := new(Addr)
+  if ip == nil {
+    a.Type = ATYPDOMAIN
+    a.Bytes = []byte(host)
+    return a
+  }
+  if govalidator.IsIPv4(host) {
+    a.Type = ATYPV4
+    a.Bytes = ip.To4()
+    return a
+  }
+  a.Type = ATYPV6
+  a.Bytes = ip.To16()
+  return a
+}
+
+func parseHostPort(addr string) (*Addr, uint16) {
+  host, portStr, err := net.SplitHostPort(addr)
+  if err != nil {
+    return nil, 0
+  }
+  port, ok := parseUint16(portStr)
+  if !ok {
+    return nil, 0
+  }
+  return parseHost(host), port
+}
+
 // Returns "ip4" if ATYP byte value is ATYPV4, "ip6" if ATYPV6,
-// "fqdn" if ATYPDOMAIN, which stands for fully-qualified domain name,
+// "ip" if ATYPDOMAIN, which stands for fully-qualified domain name,
 // "unknown" otherwise.
 func (a *Addr) Network() string {
 	switch a.Type {
@@ -115,7 +152,7 @@ func (a *Addr) String() string {
 	if a.Type == ATYPDOMAIN {
 		return string(a.Bytes)
 	}
-	return fmt.Sprintf("unknown network 0x%02X addr(hex) % X", a.Type, a.Bytes)
+	return fmt.Sprintf("% X", a.Bytes)
 }
 
 func (a *Addr) cpy() *Addr {
@@ -126,11 +163,34 @@ func (a *Addr) cpy() *Addr {
 	return b
 }
 
+// Converts to raw bytes used in SOCKS5 traffic. (ATYP+ADDR)
+// Always returns nil error.
+func (a *Addr) MarshalBinary() (data []byte, err error) {
+	if a.Type == ATYPDOMAIN {
+		var l int
+		if len(data) > 0xFF {
+			l = 0xFF
+		} else {
+			l = len(data)
+		}
+		data = make([]byte, 2+l)
+		data[1] = byte(l)
+		copy(data[2:], a.Bytes)
+	} else {
+		data = make([]byte, 1+len(a.Bytes))
+		copy(data[1:], a.Bytes)
+	}
+	data[0] = a.Type
+	return
+}
+
 type Handshake struct {
 	ver          byte
 	nmethods     byte
 	methods      []byte
 	methodChosen byte
+	laddr        net.Addr
+	raddr        net.Addr
 
 	wg   *sync.WaitGroup
 	once *sync.Once
@@ -209,8 +269,18 @@ func (r *Handshake) Methods() []byte {
 	return s
 }
 
+func (r *Handshake) LocalAddr() net.Addr {
+	return r.laddr
+}
+
+func (r *Handshake) RemoteAddr() net.Addr {
+	return r.raddr
+}
+
 // Request contains common info of all types of requests, like CMD and DST.
 // Use ConnectRequest e.t.c. for manipulation.
+// All different types of requests can be accepted / denied only once. Their 
+// accept / deny func can be called simultainously. 
 type Request struct {
 	cmd     byte
 	dstAddr *Addr
@@ -220,10 +290,7 @@ type Request struct {
 	laddr net.Addr
 	once  *sync.Once
 	wg    *sync.WaitGroup
-	// Watch out, when Request is assigned to different types of
-	// requests, it's copy assigned! So use Request.reply() to read
-	// the rep field in Server.serveClient()!
-	rep byte
+	reply *reply
 }
 
 func readRequest(reader io.Reader) (*Request, error) {
@@ -254,6 +321,10 @@ func readRequest(reader io.Reader) (*Request, error) {
 		return nil, err
 	}
 
+  req.once = new(sync.Once)
+  req.wg = new(sync.WaitGroup)
+  req.reply = new(reply)
+
 	return req, nil
 }
 
@@ -275,23 +346,28 @@ func (r *Request) DstPort() uint16 {
 
 // Denies the request with REP byte code.
 // If rep is RepSucceeded, it's replaced by RepGeneralFailure.
-func (r *Request) Deny(rep byte) {
-	r.deny(rep)
+// Param addr is used for BND fields, and it can be invalid with BND.ADDR
+// set to empty domain name, BND.PORT set to 0. 
+func (r *Request) Deny(rep byte, addr string) {
+  a, port := parseHostPort(addr)
+  if a == nil {
+    r.deny(rep, emptyFQDN, zeroPort)
+    return
+  }
+	r.deny(rep, a, port)
 }
 
-func (r *Request) deny(rep byte) {
+func (r *Request) deny(rep byte, addr *Addr, port uint16) {
 	r.once.Do(func() {
 		if rep == RepSucceeded {
-			r.rep = RepGeneralFailure
+			r.reply.rep = RepGeneralFailure
 		} else {
-			r.rep = rep
+			r.reply.rep = rep
 		}
+    r.reply.bndAddr = addr
+    r.reply.bndPort = port
 		r.wg.Done()
 	})
-}
-
-func (r *Request) reply() byte {
-	return r.rep
 }
 
 type ConnectRequest struct {
@@ -301,92 +377,140 @@ type ConnectRequest struct {
 
 // Accepts the request, and starts proxying.
 // Request is denied if param conn is nil.
+// Request is also denied if addr returned by conn.LocalAddr() doesn't contain a 
+// port number. 
+// Port 0 is valid and will be sent as-is. 
 func (r *ConnectRequest) Accept(conn net.Conn) {
-	if conn != nil {
-		r.accept(conn)
-	} else {
-		r.deny(RepGeneralFailure)
-	}
+  if conn == nil || conn.LocalAddr() == nil {
+    r.deny(RepGeneralFailure, emptyFQDN.cpy(), zeroPort)
+    return
+  }
+  addr, port := parseHostPort(conn.LocalAddr().String())
+  if addr == nil {
+    r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+    return
+  }
+  r.accept(conn, addr, port)
 }
 
-func (r *ConnectRequest) accept(conn net.Conn) {
+func (r *ConnectRequest) accept(conn net.Conn, addr *Addr, port uint16) {
 	r.once.Do(func() {
 		r.conn = conn
+    r.reply.bndAddr = addr
+    r.reply.bndPort = port
 		r.wg.Done()
 	})
 }
 
 type BindRequest struct {
 	Request
-	laddr    *Addr
 	conn     net.Conn
 	bindWg   *sync.WaitGroup
 	bindOnce *sync.Once
+  bindReply *reply
 }
 
 // Accepts the request, and tells the client which address the SOCKS server
 // will listen on. This is the first reply from the server.
 // Note that s5i doesn't actually listens it for you. You can implement a
 // listener yourself or use Binder.
-// Also note that if addr.Type is not one of known types, addr.Type and addr.Bytes
-// will be sent AS-IS.
-// Mutli-homed binding is allowed.
-// Request is denied if addr is nil, or length of addr.Bytes is not 4 if IPv4, not 16 if IPv6.
-func (r *BindRequest) Accept(addr *Addr) {
-	if addr == nil {
-		r.deny(RepGeneralFailure)
-	} else {
-		r.accept(addr)
-	}
+// Request is denied if addr doesn't contain a port number. 
+// Port 0 is valid and will be sent as-is. 
+func (r *BindRequest) Accept(addr string) {
+  a, port := parseHostPort(addr)
+  if a == nil {
+    r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+    return
+  }
+  r.accept(a, port)
 }
 
-func (r *BindRequest) accept(addr *Addr) {
+func (r *BindRequest) accept(addr *Addr, port uint16) {
 	r.once.Do(func() {
-		r.laddr = addr
+    r.reply.bndAddr = addr
+    r.reply.bndPort = port
 		r.wg.Done()
 	})
 }
 
 // Binds the client. This is the second reply from the server.
 // The server interface will pipe the conn to the client.
-// RepGeneralFailure will be replied if conn is nil.
+// Request is denied if conn is nil.
+// Request is also denied if addr returned by conn.RemoteAddr() doesn't contain a 
+// port number. 
+// Port 0 is valid and will be sent as-is. 
 func (r *BindRequest) Bind(conn net.Conn) {
-	r.bindOnce.Do(func() {
-		r.conn = conn
-		r.bindWg.Done()
-	})
+  if conn == nil || conn.LocalAddr() == nil {
+    r.denyBind(RepGeneralFailure)
+    return
+  }
+  addr, port := parseHostPort(conn.LocalAddr().String())
+  if addr == nil {
+    r.denyBind(RepGeneralFailure)
+    return
+  }
+  r.bind(conn, addr, port)
+}
+
+func (r *BindRequest) bind(conn net.Conn, addr *Addr, port uint16) {
+  r.bindOnce.Do(func() {
+    r.conn = conn
+    r.bindReply.bndAddr = addr
+    r.bindReply.bndPort = port
+  })
+}
+
+func (r *BindRequest) DenyBind(rep byte, addr string) {
+  a, port := parseHostPort(addr)
+  if a == nil {
+    r.deny(rep, emptyFQDN, zeroPort)
+  } else {
+    r.deny(rep, a, port)
+  }
+}
+
+func (r *BindRequest) denyBind(rep byte, addr *Addr, port uint16) {
+  r.bindOnce.Do(func() {
+    if rep == RepSucceeded {
+      r.bindReply.rep = RepGeneralFailure
+    } else {
+      r.bindReply.rep = rep
+    }
+    r.bindReply.bndAddr = addr
+    r.bindReply.bndPort = port
+  })
 }
 
 type AssocRequest struct {
 	Request
-	addr      *Addr
 	onTermRef *func(error)
 	terminate func() error
 }
 
-// Accepts the request.
-// onTerm is called when the association terminates, e.g. TCP disconnection or IO
-// error.
+// onTerm is called when the association terminates, e.g. TCP disconnection, IO
+// error, and Association.Terminate().
 // Note that s5i doesn't actually relays the UDP traffic.
 // Implement an associator yourself, or use Associator.
-// Request is denied if addr is nil.
-func (r *AssocRequest) Accept(addr *Addr, onTerm func(error)) *Association {
-	if addr == nil {
-		r.deny(RepGeneralFailure)
-		return nil
-	}
-	return r.accept(addr, onTerm)
+// Request is denied if addr doesn't contain a port number. 
+// Port 0 is valid and will be sent as-is. 
+func (r *AssocRequest) Accept(addr string, onTerm func(error)) *Association {
+  a, port := parseHostPort(addr)
+  if a == nil {
+    r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+    return nil
+  }
+	return r.accept(a, port, onTerm)
 }
 
-func (r *AssocRequest) accept(addr *Addr, onTerm func(error)) *Association {
+func (r *AssocRequest) accept(addr *Addr, port uint16, onTerm func(error)) *Association {
 	var a *Association
 	r.once.Do(func() {
-		r.addr = addr
-		r.onTermRef = &onTerm
-		r.wg.Done()
+		*r.onTermRef = onTerm
 
 		a = new(Association)
 		a.terminate = r.terminate
+
+		r.wg.Done()
 	})
 	return a
 }
@@ -399,4 +523,22 @@ type Association struct {
 // Terminates the association.
 func (a *Association) Terminate() error {
 	return a.terminate()
+}
+
+type reply struct {
+	rep     byte
+	bndAddr *Addr
+	bndPort uint16
+}
+
+func (r *reply) MarshalBinary() (data []byte, err error) {
+	aBytes, _ := r.bndAddr.MarshalBinary()
+	l := 1 + 1 + 1 + len(aBytes) + 2
+	data = make([]byte, l)
+	data[0] = VerSOCKS5
+	data[1] = r.rep
+	data[2] = RSV
+	copy(data[2:], aBytes)
+	binary.BigEndian.PutUint16(data[l-2:], r.bndPort)
+	return data, nil
 }

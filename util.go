@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+
+	"github.com/asaskevich/govalidator"
 )
 
 type closer interface {
@@ -64,4 +67,11 @@ func addrStr(laddr, raddr net.Addr) string {
     s += " " + raddr.String()
   }
   return s
+}
+
+func parseUint16(str string) (i uint16, ok bool) {
+  if d, err := strconv.Atoi(str); err == nil && d >= 0 && d < 0x100 {
+    return uint16(d), true
+  }
+  return 0, false
 }

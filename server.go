@@ -3,6 +3,7 @@ package s5i
 
 import (
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -180,6 +181,8 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		s.closeCloser(conn)
 		return
 	}
+	hs.laddr = conn.LocalAddr()
+	hs.raddr = conn.RemoteAddr()
 
 	sent := s.selectMethod(&hs)
 
@@ -243,41 +246,49 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 
 	req.laddr = conn.LocalAddr()
 	req.raddr = conn.RemoteAddr()
-	req.once = new(sync.Once)
-	req.wg = new(sync.WaitGroup)
 	req.wg.Add(1)
 
 	var r2 any
-	// Watch out, req is copy assigning to r2!
 	switch req.cmd {
 	case CmdCONNECT:
-		r2 = &ConnectRequest{
+		cr := &ConnectRequest{
 			Request: *req,
 		}
+		r2 = cr
+		req = &cr.Request
 	case CmdBIND:
-		r2 = &BindRequest{
-			Request:  *req,
-			bindWg:   new(sync.WaitGroup),
-			bindOnce: new(sync.Once),
+		bindWg := new(sync.WaitGroup)
+		bindWg.Add(1)
+		br := &BindRequest{
+			Request:   *req,
+			bindWg:    bindWg,
+			bindOnce:  new(sync.Once),
+			bindReply: new(reply),
 		}
+		r2 = br
+		req = &br.Request
 	case CmdASSOC:
-    var onTerm func(error)
-    terminator := func() error {
-      if onTerm != nil {
-        go onTerm(nil)
-      }
-      return conn.Close()
-    }
-		r2 = &AssocRequest{
+		var onTerm func(error)
+		terminator := func() error {
+			if onTerm != nil {
+				go onTerm(nil)
+			}
+			return conn.Close()
+		}
+		ar := &AssocRequest{
 			Request:   *req,
 			terminate: terminator,
-      onTermRef: &onTerm,
+			onTermRef: &onTerm,
 		}
+		r2 = ar
+		req = &ar.Request
 	}
 
 	sent = s.evaluateRequest(r2)
 	if sent {
 		req.wg.Wait()
+	} else {
+		req.Deny(RepGeneralFailure)
 	}
 	/*
 				reply := []byte{
