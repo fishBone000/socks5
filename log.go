@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// Severity levels used by LogEntry
+// Severity levels used by [LogEntry]. 
 const (
 	SeverityDebug   = "debug"
 	SeverityInfo    = "info"
@@ -12,9 +12,9 @@ const (
 	SeverityError   = "error"
 )
 
-// SOCKS5 Server Interface outputs LogEntrys which have time stamp, severity, type and corresponding error message.
-// The returned string of its Error() func doesn't include timestamp and severity.
-// If timestamp or/and severity is required, do formatting yourself before write it to logs.
+// A LogEntry contains time stamp, severity and corresponding error message.
+// 
+// The returned string of its Error func doesn't include timestamp and severity.
 type LogEntry struct {
 	Time     time.Time // Timestamp
 	Severity string    // Severity of this error, one of severity constants

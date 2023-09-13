@@ -1,4 +1,4 @@
-# Under Construction
+# Under Construction, Preview ONLY
 # socks5-server-interface (s5i)
 This is a SOCKS5 server partial implementation. 
 
@@ -18,9 +18,9 @@ And it does:
 - Support multi-homed BINDing and UDP ASSOCIATing
 
 Also there's some implementation in this module:
-- Connector for CONNECT and outbound dialing
-- Binder for BIND and listening for incoming connection
-- Associator for UDP ASSOCIATE and UDP relaying
+- Connector for CONNECT and outbound dialing (WIP)
+- Binder for BIND and listening for incoming connection (WIP)
+- Associator for UDP ASSOCIATE and UDP relaying (WIP)
 - NoAuthSubneg for NO AUTHENTICATION subnegotiation
 - UsrPwdSubneg for USERNAME/PASSWORD subnegotiation
 - NoCap for no encapsulation/decapsulation

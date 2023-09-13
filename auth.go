@@ -6,38 +6,42 @@ import (
 	"reflect"
 )
 
+// Constants used in Username/Password Authentication for SOCKS V5 ([RFC 1929]). 
+//
+// [RFC 1929]: https://www.rfc-editor.org/rfc/rfc1929
 const (
-	VerUsrPwd byte = 0x01 // VER byte of the Username/Password Auth
-	UsrPwdStatSuccess
+	VerUsrPwd         byte = 0x01
+	UsrPwdStatSuccess byte = 0x00
 )
 
-var (
-	ErrAuthFailed = errors.New("auth failed")
-)
+var ErrAuthFailed = errors.New("auth failed")
 
-// A Subnegotiator does subnegotiation after an auth method has been chosen.
+// Subnegotiator does subnegotiation after an auth method has been chosen.
+// 
+// When subnegotiation begins, the [Server] will pass [net.Conn] to
+// Negotiate. Implementation should keep the ReadWriter for capsulation use.
+// If nil Capsulator is returned, NoCap is used instead.
+// Connection is closed if non-nil error is returned.
 type Subnegotiator interface {
-	// When subnegotiation begins, the server interface will pass net.Conn to
-	// this func. Implementation should keep the ReadWriter for capsulation use.
-	// If nil Capsulator is returned, NoCap is used instead.
-	// Connection is closed if non-nil error is returned.
-	// S5i will assign LocalAddr and RemoteAddr fields if returned error is
-	// MalformedError.
 	Negotiate(io.ReadWriter) (Capsulator, error)
 }
 
-// An Capsulator does encapsulation and decapsulation as corresponding auth method
+// Capsulator does encapsulation and decapsulation as corresponding auth method
 // requires.
 type Capsulator interface {
-	// Used for TCP connections. Connection is closed if non-nil error is returned.
+	// Used for TCP connections. 
+  // Server will invode Write for encapsulation, and Read for decapsulation. 
+  // Connection is closed if non-nil error is returned.
 	io.ReadWriter
 
 	// Used for UDP packets. Packet is dropped if non-nil error is returned.
+  // Server doesn't actually invoke these methods. 
 	EncapPacket(p []byte) ([]byte, error)
 	DecapPacket(p []byte) ([]byte, error)
 }
 
-// Subnegotiator for auth method NO AUTHENTICATION.
+// A NoAuthSubneg is a [Subnegotiator] that does no negotiation at all. 
+// It's typically used for NO AUTHENTICATION. 
 type NoAuthSubneg struct{}
 
 func (n NoAuthSubneg) Negotiate(rw io.ReadWriter) (Capsulator, error) {
@@ -46,7 +50,8 @@ func (n NoAuthSubneg) Negotiate(rw io.ReadWriter) (Capsulator, error) {
 	}, nil
 }
 
-// Capsulator that doesn't encauplate/decapsulate at all.
+// NoCap is a [Capsulator] that doesn't encauplate/decapsulate at all.
+// It's used for NO AUTHENTICATION and Username/Password Authentication. 
 type NoCap struct {
 	rw io.ReadWriter
 }
@@ -71,7 +76,8 @@ func (c NoCap) DecapPacket(p []byte) ([]byte, error) {
 	return q, nil
 }
 
-// Subnegotiator for Username/Password Authentication, implements RFC 1929.
+// A UsrPwdSubneg is a [Subnegotiator] for Username/Password Authentication. 
+// Implements RFC 1929.
 type UsrPwdSubneg struct {
 	// List of username password pair.
 	// A list entry is to be ignored if its number of elements is not 2.

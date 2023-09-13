@@ -6,8 +6,6 @@ import (
 	"io"
 	"net"
 	"strconv"
-
-	"github.com/asaskevich/govalidator"
 )
 
 type closer interface {

@@ -1,4 +1,14 @@
-// Package s5i provides a SOCKS5 server that lets external code accept/deny requests and attach outbound connections.
+// Package s5i provides a SOCKS5 server that reads and sends SOCKS5 messages, 
+// act like a proxy when outbound connection is attached, 
+// but leaves handshake and  request decisions, outbound dialing, 
+// UDP relaying, subnegotiation e.t.c. to external code.
+//
+// This provides advantages when you need multi-homed BND or UDP ASSOCIATION 
+// processing, custom subnegotiation and encryption, attach special connection to 
+// CONNECT requests e.t.c.. 
+//
+// All methods in this package, except for the methods of [Addr], are safe 
+// to call simultanously. 
 package s5i
 
 import (
@@ -9,19 +19,21 @@ import (
 	"time"
 )
 
+// Constants for server policy. 
 const (
-	// Channel capacity of all server interface's outgoing channels
+	// Channel capacity of all server interface's outgoing channels. 
 	ChanCap = 64
 	// Time to close connection if auth failed, request denied, e.t.c..
 	PeriodClose    = time.Second * time.Duration(3)
 	PeriodAutoDeny = time.Second * time.Duration(30)
 )
 
-// All methods provided by Server can be called simultanously.
-// Use channel funcs (e.g. HandshakeChan) to deal with logging, requests e.t.c..
+// A Server is a SOCKS5 server interface. 
+// 
+// Use channel funcs (e.g. [Server.HandshakeChan]) to deal with logging, requests e.t.c..
 // All channel funcs create a corresponding channel if not ever created.
-// If no channel is created or channel is full, corresponding LogEntries are
-// discarded, Handshakes, or requests are denied.
+// If no channel is created or channel is full, corresponding log entries are
+// discarded, handshakes, or requests are denied.
 type Server struct {
 	addr        *net.TCPAddr
 	listener    *net.TCPListener
@@ -34,7 +46,7 @@ type Server struct {
 	closers     map[closer]struct{}
 }
 
-// Starts the server interface. No-op if it was started once.
+// Start starts the server interface. No-op if it has been started. 
 func (s *Server) Start(addr string) (err error) {
 	if s.started {
 		return nil
@@ -62,8 +74,7 @@ func (s *Server) Running() bool {
 	return s.started && !s.down
 }
 
-// Close makes the server stops listening for new handshakes.
-// This calls Close() on the internal listener.
+// Close closes the internal listener. Connections established are not closed. 
 func (s *Server) Close() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -74,9 +85,9 @@ func (s *Server) Close() {
 	delete(s.closers, s.listener)
 }
 
-// CloseAll closes the internal listener and all connections.
-// If anything except the internal listener has failed to close,
-// Close() won't be called on it during the future calls of CloseAll().
+// CloseAll closes the internal listener and all established connections.
+// If a connection has failed to close, 
+// the [Server] won't try to close it next time. 
 func (s *Server) CloseAll() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -124,8 +135,6 @@ func (s *Server) closeCloser(c closer) error {
 	return err
 }
 
-// Creates a channel for transfering LogEntries. Will create only once.
-// LogEntries are discarded if channel is full or no channel is created.
 func (s *Server) LogChan() <-chan LogEntry {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -144,8 +153,8 @@ func (s *Server) HandshakeChan() <-chan *Handshake {
 	return (<-chan *Handshake)(s.hndshkChan)
 }
 
-// It's guaranteed that it will receive one of *ConnectRequest,
-// *BindRequest and *AssocRequest.
+// RequestChan is guaranteed to return a channel that receives one of 
+// [*ConnectRequest], [*BindRequest] and [*AssocRequest].
 func (s *Server) RequestChan() <-chan any {
 	s.mux.Lock()
 	defer s.mux.Unlock()
