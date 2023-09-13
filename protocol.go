@@ -185,6 +185,8 @@ func (a *Addr) MarshalBinary() (data []byte, err error) {
 	return
 }
 
+// Handshake will be denied automatically if it's not accepted or denied 
+// after PeriodAutoDeny. 
 type Handshake struct {
 	ver          byte
 	nmethods     byte
@@ -223,7 +225,6 @@ func readHandshake(reader io.Reader) (Handshake, error) {
 	return req, nil
 }
 
-// Accepts the handshake.
 // Handshake will be denied silently if params are invalid, e.g. method is
 // MethodNoAccepted.
 // Can be called only once, furthur calls are no-op. Can be called
@@ -284,6 +285,8 @@ func (r *Handshake) RemoteAddr() net.Addr {
 // calls are no-op. Their accept / deny func can be called simultainously.
 // Requests are denied silently if params passed to Accept func is invalid, e.g.
 // addr string doesn't contain a port number, net.Addr returned by conn is invalid.
+// Request will be denied automatically if it's not accepted or denied 
+// after PeriodAutoDeny. 
 type Request struct {
 	cmd     byte
 	dstAddr *Addr

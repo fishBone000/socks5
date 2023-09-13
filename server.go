@@ -13,9 +13,15 @@ const (
 	// Channel capacity of all server interface's outgoing channels
 	ChanCap = 64
 	// Time to close connection if auth failed, request denied, e.t.c..
-	PeriodClose = time.Second * time.Duration(3)
+	PeriodClose    = time.Second * time.Duration(3)
+	PeriodAutoDeny = time.Second * time.Duration(30)
 )
 
+// All methods provided by Server can be called simultanously. 
+// Use channel funcs (e.g. HandshakeChan) to deal with logging, requests e.t.c.. 
+// All channel funcs create a corresponding channel if not ever created. 
+// If no channel is created or channel is full, corresponding LogEntries are 
+// discarded, Handshakes, or requests are denied. 
 type Server struct {
 	addr        *net.TCPAddr
 	listener    *net.TCPListener
@@ -100,9 +106,9 @@ func (s *Server) delClosable(c closer) {
 }
 
 func (s *Server) closeCloser(c closer) error {
-  if c == nil {
-    return nil
-  }
+	if c == nil {
+		return nil
+	}
 	err := c.Close()
 	if err != nil && !errors.Is(err, net.ErrClosed) {
 		switch c.(type) {
@@ -115,11 +121,11 @@ func (s *Server) closeCloser(c closer) error {
 		}
 	}
 	s.delClosable(c)
-  return err
+	return err
 }
 
-// Gets LogEntry channel from the Server.
-// LogEntries are discarded if channel is full or this func is not ever called.
+// Creates a channel for transfering LogEntries. Will create only once. 
+// LogEntries are discarded if channel is full or no channel is created. 
 func (s *Server) LogChan() <-chan LogEntry {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -129,9 +135,6 @@ func (s *Server) LogChan() <-chan LogEntry {
 	return (<-chan LogEntry)(s.logChan)
 }
 
-// Gets handshake request structs from the server.
-// Handshakes are rejected by closing connection if channel is full or this func
-// is not ever called.
 func (s *Server) HandshakeChan() <-chan *Handshake {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -141,10 +144,8 @@ func (s *Server) HandshakeChan() <-chan *Handshake {
 	return (<-chan *Handshake)(s.hndshkChan)
 }
 
-// Gets channel that receives requests from the Server.
 // It's guaranteed that it will receive one of *ConnectRequest,
 // *BindRequest and *AssocRequest.
-// Requests are denied if channel is full or this func is not ever called.
 func (s *Server) RequestChan() <-chan any {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -188,6 +189,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	hs.laddr = conn.LocalAddr()
 	hs.raddr = conn.RemoteAddr()
 
+  time.AfterFunc(PeriodAutoDeny, hs.Deny)
 	sent := s.selectMethod(&hs)
 
 	if !sent {
@@ -278,25 +280,25 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		req = &cr.Request
 	case CmdBIND:
 		br := &BindRequest{
-			Request:   *req,
+			Request: *req,
 		}
-    br.reply = nil // Bind() relies on this to check if it's accepted
-    br.bindWg.Add(1)
+		br.reply = nil // Bind() relies on this to check if it's accepted
+		br.bindWg.Add(1)
 		wrappedReq = br
 		req = &br.Request
 	case CmdASSOC:
 		ar := &AssocRequest{
-			Request:   *req,
+			Request: *req,
 		}
 		terminator := func() error {
-      go ar.notifyOnce.Do(func() {
-        if ar.notify != nil {
-          ar.notify(nil)
-        }
-      })
-      return s.closeCloser(conn)
+			go ar.notifyOnce.Do(func() {
+				if ar.notify != nil {
+					ar.notify(nil)
+				}
+			})
+			return s.closeCloser(conn)
 		}
-    ar.terminate = terminator
+		ar.terminate = terminator
 		wrappedReq = ar
 		req = &ar.Request
 	default:
@@ -311,7 +313,12 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	if req.cmd != CmdCONNECT && req.cmd != CmdBIND && req.cmd != CmdASSOC {
 		req.deny(RepCmdNotSupported, emptyFQDN, zeroPort)
 	} else {
+    time.AfterFunc(PeriodAutoDeny, func() {
+      req.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+    })
+
 		sent = s.evaluateRequest(wrappedReq)
+
 		if sent {
 			req.wg.Wait()
 		} else {
@@ -327,7 +334,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 
 	raw, _ := req.reply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
-		s.err(&OpError{Op: "reply request " + cmdCode2Str(req.cmd), Err: err })
+		s.err(&OpError{Op: "reply request " + cmdCode2Str(req.cmd), Err: err})
 		s.closeCloser(conn)
 		return
 	}
@@ -352,7 +359,7 @@ func (s *Server) handleConnect(r *ConnectRequest, capper Capsulator, conn net.Co
 		return
 	}
 
-  s.regClosable(r.conn)
+	s.regClosable(r.conn)
 
 	infoOnce := sync.OnceFunc(func() {
 		s.info(nil, "CONNECT connection closed. ")
@@ -379,11 +386,11 @@ func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
 		return
 	}
 
-  r.bindWg.Wait()
+	r.bindWg.Wait()
 
-  raw, _ := r.bindReply.MarshalBinary()
+	raw, _ := r.bindReply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
-		s.err(&OpError{Op: "reply BND(2nd)", Err: err })
+		s.err(&OpError{Op: "reply BND(2nd)", Err: err})
 		s.closeCloser(conn)
 		return
 	}
@@ -409,20 +416,20 @@ func (s *Server) handleAssoc(r *AssocRequest, conn net.Conn) {
 	if r.reply.rep != RepSucceeded {
 		time.AfterFunc(PeriodClose, func() {
 			s.closeCloser(conn)
-      r.terminate()
+			r.terminate()
 		})
 	}
 }
 
-func (s *Server) selectMethod(r *Handshake) (sent bool) {
-	r.wg.Add(1)
+func (s *Server) selectMethod(hs *Handshake) (sent bool) {
+	hs.wg.Add(1)
 	s.mux.Lock()
 	if s.hndshkChan != nil {
 		s.mux.Unlock()
 		select {
-		case s.hndshkChan <- r:
+		case s.hndshkChan <- hs:
 			sent = true
-			r.wg.Wait()
+			hs.wg.Wait()
 		default:
 		}
 	} else {
