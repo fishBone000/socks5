@@ -1,4 +1,4 @@
-package s5i
+package socksy5
 
 import (
 	"time"

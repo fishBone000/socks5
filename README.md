@@ -1,5 +1,5 @@
 # Under Construction, Preview ONLY
-# socks5-server-interface (s5i)
+# SOCKSY5
 This is a SOCKS5 server partial implementation. 
 
 Unlike regular SOCKS5 servers, it lets external code handle many stuff:

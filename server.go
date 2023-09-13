@@ -1,4 +1,4 @@
-// Package s5i provides a SOCKS5 server that reads and sends SOCKS5 messages, 
+// Package socksy5 provides a SOCKS5 server that reads and sends SOCKS5 messages, 
 // act like a proxy when outbound connection is attached, 
 // but leaves handshake and  request decisions, outbound dialing, 
 // UDP relaying, subnegotiation e.t.c. to external code.
@@ -9,7 +9,7 @@
 //
 // All methods in this package, except for the methods of [Addr], are safe 
 // to call simultanously. 
-package s5i
+package socksy5
 
 import (
 	"errors"
@@ -21,7 +21,7 @@ import (
 
 // Constants for server policy. 
 const (
-	// Channel capacity of all server interface's outgoing channels. 
+	// Channel capacity of all channels returned by Server's channel functions. 
 	ChanCap = 64
 	// Time to close connection if auth failed, request denied, e.t.c..
 	PeriodClose    = time.Second * time.Duration(3)
@@ -46,7 +46,7 @@ type Server struct {
 	closers     map[closer]struct{}
 }
 
-// Start starts the server interface. No-op if it has been started. 
+// Start starts the Server. No-op if it has been started. 
 func (s *Server) Start(addr string) (err error) {
 	if s.started {
 		return nil
