@@ -6,21 +6,19 @@ import (
 	"net"
 )
 
-var (
-  // Request/response is malformed, e.g. incorrect VER byte value, RSV byte is
-  // not 0x00
-  ErrMalformed = errors.New("malformed")
-)
+// Request/response is malformed, e.g. incorrect VER byte value, RSV byte is
+// not 0x00
+var ErrMalformed = errors.New("malformed")
 
 type OpError struct {
-  Op string
+	Op         string
 	LocalAddr  net.Addr
 	RemoteAddr net.Addr
-  Err error
+	Err        error
 }
 
 func (e *OpError) Error() string {
-  // Yeah this is mostly copy-pasted from net.go
+	// Yeah this is mostly copy-pasted from net.go
 	if e == nil {
 		return "<nil>"
 	}
@@ -41,12 +39,11 @@ func (e *OpError) Error() string {
 }
 
 func (e *OpError) Unwrap() error {
-  return e.Err
+	return e.Err
 }
 
-
 type CmdNotSupportedError struct {
-	Cmd        byte
+	Cmd byte
 }
 
 func (e *CmdNotSupportedError) Error() string {
@@ -57,12 +54,12 @@ func (e *CmdNotSupportedError) Error() string {
 }
 
 type RequestNotHandledError struct {
-  Type string // One of "handshake", "CONNECT", "BIND", "UDP ASSOCIATE"
+	Type string // One of "handshake", "CONNECT", "BIND", "UDP ASSOCIATE"
 }
 
 func (e *RequestNotHandledError) Error() string {
-  if e == nil {
-    return "<nil>"
-  }
+	if e == nil {
+		return "<nil>"
+	}
 	return fmt.Sprintf("%s request not handled")
 }

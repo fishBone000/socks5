@@ -67,7 +67,8 @@ type Addr struct {
 	Bytes []byte
 }
 
-var emptyFQDN = &Addr{ Type: ATYPDOMAIN, Bytes: nil }
+var emptyFQDN = &Addr{Type: ATYPDOMAIN, Bytes: nil}
+
 const zeroPort uint16 = 0x0000
 
 func readAddr(reader io.Reader) (*Addr, error) {
@@ -101,33 +102,33 @@ func readAddr(reader io.Reader) (*Addr, error) {
 }
 
 func parseHost(host string) *Addr {
-  ip := net.ParseIP(host)
-  a := new(Addr)
-  if ip == nil {
-    a.Type = ATYPDOMAIN
-    a.Bytes = []byte(host)
-    return a
-  }
-  if govalidator.IsIPv4(host) {
-    a.Type = ATYPV4
-    a.Bytes = ip.To4()
-    return a
-  }
-  a.Type = ATYPV6
-  a.Bytes = ip.To16()
-  return a
+	ip := net.ParseIP(host)
+	a := new(Addr)
+	if ip == nil {
+		a.Type = ATYPDOMAIN
+		a.Bytes = []byte(host)
+		return a
+	}
+	if govalidator.IsIPv4(host) {
+		a.Type = ATYPV4
+		a.Bytes = ip.To4()
+		return a
+	}
+	a.Type = ATYPV6
+	a.Bytes = ip.To16()
+	return a
 }
 
 func parseHostPort(addr string) (*Addr, uint16) {
-  host, portStr, err := net.SplitHostPort(addr)
-  if err != nil {
-    return nil, 0
-  }
-  port, ok := parseUint16(portStr)
-  if !ok {
-    return nil, 0
-  }
-  return parseHost(host), port
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, 0
+	}
+	port, ok := parseUint16(portStr)
+	if !ok {
+		return nil, 0
+	}
+	return parseHost(host), port
 }
 
 // Returns "ip4" if ATYP byte value is ATYPV4, "ip6" if ATYPV6,
@@ -223,12 +224,10 @@ func readHandshake(reader io.Reader) (Handshake, error) {
 }
 
 // Accepts the handshake.
-// Handshake will be denied if:
-// 1. Param neg is nil and selected method is not NO
-// AUTHENTICATION.
-// 2. Param method doesn't match any client's requested
-// methods.
-// 3. Param method is NO ACCEPTABLE METHODS
+// Handshake will be denied silently if params are invalid, e.g. method is
+// MethodNoAccepted.
+// Can be called only once, furthur calls are no-op. Can be called
+// simultainously.
 func (r *Handshake) Accept(method byte, neg Subnegotiator) {
 	if neg == nil && method != MethodNoAuth || method == MethodNoAccepted {
 		r.deny()
@@ -251,6 +250,8 @@ func (r *Handshake) accept(method byte, neg Subnegotiator) {
 }
 
 // Denies the handshake by returning NO ACCEPTABLE METHODS
+// Can be called only once, furthur calls are no-op. Can be called
+// simultainously.
 func (r *Handshake) Deny() {
 	r.deny()
 }
@@ -279,8 +280,10 @@ func (r *Handshake) RemoteAddr() net.Addr {
 
 // Request contains common info of all types of requests, like CMD and DST.
 // Use ConnectRequest e.t.c. for manipulation.
-// All different types of requests can be accepted / denied only once. Their 
-// accept / deny func can be called simultainously. 
+// All different types of requests can be accepted / denied only once. Furthur
+// calls are no-op. Their accept / deny func can be called simultainously.
+// Requests are denied silently if params passed to Accept func is invalid, e.g.
+// addr string doesn't contain a port number, net.Addr returned by conn is invalid.
 type Request struct {
 	cmd     byte
 	dstAddr *Addr
@@ -321,9 +324,9 @@ func readRequest(reader io.Reader) (*Request, error) {
 		return nil, err
 	}
 
-  req.once = new(sync.Once)
-  req.wg = new(sync.WaitGroup)
-  req.reply = new(reply)
+	req.once = new(sync.Once)
+	req.wg = new(sync.WaitGroup)
+	req.reply = new(reply)
 
 	return req, nil
 }
@@ -347,13 +350,13 @@ func (r *Request) DstPort() uint16 {
 // Denies the request with REP byte code.
 // If rep is RepSucceeded, it's replaced by RepGeneralFailure.
 // Param addr is used for BND fields, and it can be invalid with BND.ADDR
-// set to empty domain name, BND.PORT set to 0. 
+// set to empty domain name, BND.PORT set to 0.
 func (r *Request) Deny(rep byte, addr string) {
-  a, port := parseHostPort(addr)
-  if a == nil {
-    r.deny(rep, emptyFQDN, zeroPort)
-    return
-  }
+	a, port := parseHostPort(addr)
+	if a == nil {
+		r.deny(rep, emptyFQDN, zeroPort)
+		return
+	}
 	r.deny(rep, a, port)
 }
 
@@ -364,8 +367,8 @@ func (r *Request) deny(rep byte, addr *Addr, port uint16) {
 		} else {
 			r.reply.rep = rep
 		}
-    r.reply.bndAddr = addr
-    r.reply.bndPort = port
+		r.reply.bndAddr = addr
+		r.reply.bndPort = port
 		r.wg.Done()
 	})
 }
@@ -376,136 +379,150 @@ type ConnectRequest struct {
 }
 
 // Accepts the request, and starts proxying.
-// Request is denied if param conn is nil.
-// Request is also denied if addr returned by conn.LocalAddr() doesn't contain a 
-// port number. 
-// Port 0 is valid and will be sent as-is. 
+// Port 0 is valid and will be sent as-is.
 func (r *ConnectRequest) Accept(conn net.Conn) {
-  if conn == nil || conn.LocalAddr() == nil {
-    r.deny(RepGeneralFailure, emptyFQDN.cpy(), zeroPort)
-    return
-  }
-  addr, port := parseHostPort(conn.LocalAddr().String())
-  if addr == nil {
-    r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
-    return
-  }
-  r.accept(conn, addr, port)
+	if conn == nil || conn.LocalAddr() == nil {
+		r.deny(RepGeneralFailure, emptyFQDN.cpy(), zeroPort)
+		return
+	}
+	addr, port := parseHostPort(conn.LocalAddr().String())
+	if addr == nil {
+		r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+		return
+	}
+	r.accept(conn, addr, port)
 }
 
 func (r *ConnectRequest) accept(conn net.Conn, addr *Addr, port uint16) {
 	r.once.Do(func() {
 		r.conn = conn
-    r.reply.bndAddr = addr
-    r.reply.bndPort = port
+		r.reply.bndAddr = addr
+		r.reply.bndPort = port
 		r.wg.Done()
 	})
 }
 
 type BindRequest struct {
 	Request
-	conn     net.Conn
-	bindWg   *sync.WaitGroup
-	bindOnce *sync.Once
-  bindReply *reply
+	conn      net.Conn
+	bindMux   sync.Mutex // To avoid simultainous rw on reply field
+	bindWg    sync.WaitGroup
+	bindOnce  sync.Once
+	bindReply *reply
 }
 
 // Accepts the request, and tells the client which address the SOCKS server
 // will listen on. This is the first reply from the server.
 // Note that s5i doesn't actually listens it for you. You can implement a
 // listener yourself or use Binder.
-// Request is denied if addr doesn't contain a port number. 
-// Port 0 is valid and will be sent as-is. 
+// Port 0 is valid and will be sent as-is.
 func (r *BindRequest) Accept(addr string) {
-  a, port := parseHostPort(addr)
-  if a == nil {
-    r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
-    return
-  }
-  r.accept(a, port)
+	a, port := parseHostPort(addr)
+	if a == nil {
+		r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+		return
+	}
+	r.accept(a, port)
 }
 
 func (r *BindRequest) accept(addr *Addr, port uint16) {
 	r.once.Do(func() {
-    r.reply.bndAddr = addr
-    r.reply.bndPort = port
+		r.bindMux.Lock()
+		defer r.bindMux.Unlock()
+		r.reply = new(reply)
+		r.reply.bndAddr = addr
+		r.reply.bndPort = port
 		r.wg.Done()
 	})
 }
 
 // Binds the client. This is the second reply from the server.
 // The server interface will pipe the conn to the client.
+// No-op if the first reply is not decided.
 // Request is denied if conn is nil.
-// Request is also denied if addr returned by conn.RemoteAddr() doesn't contain a 
-// port number. 
-// Port 0 is valid and will be sent as-is. 
+// Port 0 is valid and will be sent as-is.
 func (r *BindRequest) Bind(conn net.Conn) {
-  if conn == nil || conn.LocalAddr() == nil {
-    r.denyBind(RepGeneralFailure)
-    return
-  }
-  addr, port := parseHostPort(conn.LocalAddr().String())
-  if addr == nil {
-    r.denyBind(RepGeneralFailure)
-    return
-  }
-  r.bind(conn, addr, port)
+	r.bindMux.Lock()
+	defer r.bindMux.Unlock()
+	if r.reply == nil {
+		return
+	}
+
+	if conn == nil || conn.LocalAddr() == nil {
+		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort)
+		return
+	}
+	addr, port := parseHostPort(conn.LocalAddr().String())
+	if addr == nil {
+		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort)
+		return
+	}
+	r.bind(conn, addr, port)
 }
 
 func (r *BindRequest) bind(conn net.Conn, addr *Addr, port uint16) {
-  r.bindOnce.Do(func() {
-    r.conn = conn
-    r.bindReply.bndAddr = addr
-    r.bindReply.bndPort = port
-  })
+	r.bindOnce.Do(func() {
+		r.conn = conn
+		r.bindReply = new(reply)
+		r.bindReply.bndAddr = addr
+		r.bindReply.bndPort = port
+	})
 }
 
+// No-op if the first reply is not decided.
 func (r *BindRequest) DenyBind(rep byte, addr string) {
-  a, port := parseHostPort(addr)
-  if a == nil {
-    r.deny(rep, emptyFQDN, zeroPort)
-  } else {
-    r.deny(rep, a, port)
-  }
+	r.bindMux.Lock()
+	defer r.bindMux.Unlock()
+	if r.reply == nil {
+		return
+	}
+
+	a, port := parseHostPort(addr)
+	if a == nil {
+		r.deny(rep, emptyFQDN, zeroPort)
+	} else {
+		r.deny(rep, a, port)
+	}
 }
 
 func (r *BindRequest) denyBind(rep byte, addr *Addr, port uint16) {
-  r.bindOnce.Do(func() {
-    if rep == RepSucceeded {
-      r.bindReply.rep = RepGeneralFailure
-    } else {
-      r.bindReply.rep = rep
-    }
-    r.bindReply.bndAddr = addr
-    r.bindReply.bndPort = port
-  })
+	r.bindOnce.Do(func() {
+		if rep == RepSucceeded {
+			r.bindReply.rep = RepGeneralFailure
+		} else {
+			r.bindReply.rep = rep
+		}
+		r.bindReply = new(reply)
+		r.bindReply.bndAddr = addr
+		r.bindReply.bndPort = port
+	})
 }
 
 type AssocRequest struct {
 	Request
-	onTermRef *func(error)
-	terminate func() error
+	notifyOnce sync.Once
+	notify     func(error)
+	terminate  func() error
 }
 
-// onTerm is called when the association terminates, e.g. TCP disconnection, IO
-// error, and Association.Terminate().
+// Param notify is called when the association terminates, e.g. TCP disconnection, 
+// IO error, and Association.Terminate().
 // Note that s5i doesn't actually relays the UDP traffic.
 // Implement an associator yourself, or use Associator.
-// Request is denied if addr doesn't contain a port number. 
-// Port 0 is valid and will be sent as-is. 
-func (r *AssocRequest) Accept(addr string, onTerm func(error)) *Association {
-  a, port := parseHostPort(addr)
-  if a == nil {
-    r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
-    return nil
-  }
-	return r.accept(a, port, onTerm)
+// Port 0 is valid and will be sent as-is.
+func (r *AssocRequest) Accept(addr string, notify func(reason error)) *Association {
+	a, port := parseHostPort(addr)
+	if a == nil {
+		r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+		return nil
+	}
+	return r.accept(a, port, notify)
 }
 
-func (r *AssocRequest) accept(addr *Addr, port uint16, onTerm func(error)) *Association {
+func (r *AssocRequest) accept(addr *Addr, port uint16, notify func(error)) *Association {
 	var a *Association
 	r.once.Do(func() {
-		*r.onTermRef = onTerm
+		r.notify = notify
 
 		a = new(Association)
 		a.terminate = r.terminate
@@ -515,7 +532,8 @@ func (r *AssocRequest) accept(addr *Addr, port uint16, onTerm func(error)) *Asso
 	return a
 }
 
-// Association is provided for terminating the UDP association.
+// Association is provided for terminating the UDP association by closing the 
+// control connection. 
 type Association struct {
 	terminate func() error
 }

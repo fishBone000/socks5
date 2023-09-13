@@ -12,8 +12,8 @@ import (
 const (
 	// Channel capacity of all server interface's outgoing channels
 	ChanCap = 64
-	// Time to close connection if auth failed, e.t.c..
-	PeriodCloseErr = time.Second * time.Duration(8)
+	// Time to close connection if auth failed, request denied, e.t.c..
+	PeriodClose = time.Second * time.Duration(3)
 )
 
 type Server struct {
@@ -99,7 +99,10 @@ func (s *Server) delClosable(c closer) {
 	delete(s.closers, c)
 }
 
-func (s *Server) closeCloser(c closer) {
+func (s *Server) closeCloser(c closer) error {
+  if c == nil {
+    return nil
+  }
 	err := c.Close()
 	if err != nil && !errors.Is(err, net.ErrClosed) {
 		switch c.(type) {
@@ -112,6 +115,7 @@ func (s *Server) closeCloser(c closer) {
 		}
 	}
 	s.delClosable(c)
+  return err
 }
 
 // Gets LogEntry channel from the Server.
@@ -197,6 +201,22 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		return
 	}
 
+	hsReply := []byte{VerSOCKS5, hs.methodChosen}
+	if _, err := conn.Write(hsReply); err != nil {
+		s.err(&OpError{
+			Op:  "reply handshake",
+			Err: err,
+		})
+		s.closeCloser(conn)
+		return
+	}
+	if hs.methodChosen == MethodNoAccepted {
+		time.AfterFunc(PeriodClose, func() {
+			s.closeCloser(conn)
+		})
+		return
+	}
+
 	capper, err := hs.neg.Negotiate(conn)
 	if err != nil {
 		e := &OpError{
@@ -216,7 +236,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 			}
 		}
 
-		time.AfterFunc(PeriodCloseErr, func() {
+		time.AfterFunc(PeriodClose, func() {
 			s.closeCloser(conn)
 		})
 
@@ -248,86 +268,151 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	req.raddr = conn.RemoteAddr()
 	req.wg.Add(1)
 
-	var r2 any
+	var wrappedReq any
 	switch req.cmd {
 	case CmdCONNECT:
 		cr := &ConnectRequest{
 			Request: *req,
 		}
-		r2 = cr
+		wrappedReq = cr
 		req = &cr.Request
 	case CmdBIND:
-		bindWg := new(sync.WaitGroup)
-		bindWg.Add(1)
 		br := &BindRequest{
 			Request:   *req,
-			bindWg:    bindWg,
-			bindOnce:  new(sync.Once),
-			bindReply: new(reply),
 		}
-		r2 = br
+    br.reply = nil // Bind() relies on this to check if it's accepted
+    br.bindWg.Add(1)
+		wrappedReq = br
 		req = &br.Request
 	case CmdASSOC:
-		var onTerm func(error)
-		terminator := func() error {
-			if onTerm != nil {
-				go onTerm(nil)
-			}
-			return conn.Close()
-		}
 		ar := &AssocRequest{
 			Request:   *req,
-			terminate: terminator,
-			onTermRef: &onTerm,
 		}
-		r2 = ar
+		terminator := func() error {
+      go ar.notifyOnce.Do(func() {
+        if ar.notify != nil {
+          ar.notify(nil)
+        }
+      })
+      return s.closeCloser(conn)
+		}
+    ar.terminate = terminator
+		wrappedReq = ar
 		req = &ar.Request
+	default:
+		s.warn(&OpError{
+			Op:         "serve",
+			LocalAddr:  conn.LocalAddr(),
+			RemoteAddr: conn.RemoteAddr(),
+			Err:        &CmdNotSupportedError{Cmd: req.cmd},
+		})
 	}
 
-	sent = s.evaluateRequest(r2)
-	if sent {
-		req.wg.Wait()
+	if req.cmd != CmdCONNECT && req.cmd != CmdBIND && req.cmd != CmdASSOC {
+		req.deny(RepCmdNotSupported, emptyFQDN, zeroPort)
 	} else {
-		req.Deny(RepGeneralFailure)
+		sent = s.evaluateRequest(wrappedReq)
+		if sent {
+			req.wg.Wait()
+		} else {
+			s.warn(&OpError{
+				Op:         "serve",
+				LocalAddr:  conn.LocalAddr(),
+				RemoteAddr: conn.RemoteAddr(),
+				Err:        &RequestNotHandledError{Type: cmdCode2Str(req.cmd)},
+			})
+			req.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+		}
 	}
-	/*
-				reply := []byte{
-					VerSOCKS5,
-					RepCmdNotSupported,
-					RSV,
-					ATYPV4,
-					0x00, 0x00, 0x00, 0x00,
-					0x00, 0x00,
-				}
 
-				s.warn(&OpError{
-					Op:         "serve",
-					LocalAddr:  conn.LocalAddr(),
-					RemoteAddr: conn.RemoteAddr(),
-					Err:        &CmdNotSupportedError{Cmd: req.cmd},
-				})
-				_, err := capper.Write(reply)
-		    if err != nil {
-		      s.err(&OpError{ Op: "deny request", Err: err })
-		    }
+	raw, _ := req.reply.MarshalBinary()
+	if _, err := capper.Write(raw); err != nil {
+		s.err(&OpError{Op: "reply request " + cmdCode2Str(req.cmd), Err: err })
+		s.closeCloser(conn)
+		return
+	}
 
-				time.AfterFunc(PeriodCloseErr, func() {
-					s.closeCloser(conn)
-				})
-	*/
+	switch req.cmd {
+	case CmdCONNECT:
+		s.handleConnect(wrappedReq.(*ConnectRequest), capper, conn)
+	case CmdBIND:
+		s.handleBind(wrappedReq.(*BindRequest), capper, conn)
+	case CmdASSOC:
+		s.handleAssoc(wrappedReq.(*AssocRequest), conn)
+	}
 	return
 }
 
-func (s *Server) handleConnect(r *ConnectRequest) {
-	sent := s.sendRequest(r)
-	if !sent {
-		r.Deny(RepGeneralFailure)
+func (s *Server) handleConnect(r *ConnectRequest, capper Capsulator, conn net.Conn) {
+	if r.reply.rep != RepSucceeded {
+		time.AfterFunc(PeriodClose, func() {
+			s.closeCloser(r.conn)
+			s.closeCloser(conn)
+		})
+		return
 	}
+
+  s.regClosable(r.conn)
+
+	infoOnce := sync.OnceFunc(func() {
+		s.info(nil, "CONNECT connection closed. ")
+	})
+	go func() {
+		io.Copy(capper, conn)
+		infoOnce()
+		s.closeCloser(r.conn)
+		s.closeCloser(conn)
+	}()
+	go func() {
+		io.Copy(conn, capper)
+		infoOnce()
+		s.closeCloser(r.conn)
+		s.closeCloser(conn)
+	}()
 }
 
-func (s *Server) handleBind(r *BindRequest)
+func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
+	if r.reply.rep != RepSucceeded {
+		time.AfterFunc(PeriodClose, func() {
+			s.closeCloser(r.conn)
+		})
+		return
+	}
 
-func (s *Server) handleAssoc(r *AssocRequest)
+  r.bindWg.Wait()
+
+  raw, _ := r.bindReply.MarshalBinary()
+	if _, err := capper.Write(raw); err != nil {
+		s.err(&OpError{Op: "reply BND(2nd)", Err: err })
+		s.closeCloser(conn)
+		return
+	}
+
+	infoOnce := sync.OnceFunc(func() {
+		s.info(nil, "BND connection closed. ") // TODO make info util
+	})
+	go func() {
+		io.Copy(capper, r.conn)
+		infoOnce()
+		s.closeCloser(r.conn)
+		s.closeCloser(conn)
+	}()
+	go func() {
+		io.Copy(r.conn, capper)
+		infoOnce()
+		s.closeCloser(r.conn)
+		s.closeCloser(conn)
+	}()
+}
+
+func (s *Server) handleAssoc(r *AssocRequest, conn net.Conn) {
+	if r.reply.rep != RepSucceeded {
+		time.AfterFunc(PeriodClose, func() {
+			s.closeCloser(conn)
+      r.terminate()
+		})
+	}
+}
 
 func (s *Server) selectMethod(r *Handshake) (sent bool) {
 	r.wg.Add(1)

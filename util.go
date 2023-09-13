@@ -75,3 +75,22 @@ func parseUint16(str string) (i uint16, ok bool) {
   }
   return 0, false
 }
+
+func cmdCode2Str(cmd byte) string {
+  switch cmd {
+  case CmdCONNECT:
+    return "CONNECT"
+  case CmdBIND:
+    return "BIND"
+  case CmdASSOC:
+    return "UDP ASSOCIATE"
+  default:
+    return "CMD "+fmt.Sprintf("0x%02X", cmd)
+  }
+}
+
+func copyClose(s *Server, r io.ReadCloser, w io.WriteCloser) {
+  io.Copy(w, r)
+  s.closeCloser(r)
+  s.closeCloser(w)
+}
