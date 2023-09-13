@@ -185,8 +185,8 @@ func (a *Addr) MarshalBinary() (data []byte, err error) {
 	return
 }
 
-// Handshake will be denied automatically if it's not accepted or denied 
-// after PeriodAutoDeny. 
+// Handshake will be denied automatically if it's not accepted or denied
+// after PeriodAutoDeny.
 type Handshake struct {
 	ver          byte
 	nmethods     byte
@@ -285,8 +285,8 @@ func (r *Handshake) RemoteAddr() net.Addr {
 // calls are no-op. Their accept / deny func can be called simultainously.
 // Requests are denied silently if params passed to Accept func is invalid, e.g.
 // addr string doesn't contain a port number, net.Addr returned by conn is invalid.
-// Request will be denied automatically if it's not accepted or denied 
-// after PeriodAutoDeny. 
+// Request will be denied automatically if it's not accepted or denied
+// after PeriodAutoDeny.
 type Request struct {
 	cmd     byte
 	dstAddr *Addr
@@ -508,7 +508,7 @@ type AssocRequest struct {
 	terminate  func() error
 }
 
-// Param notify is called when the association terminates, e.g. TCP disconnection, 
+// Param notify is called when the association terminates, e.g. TCP disconnection,
 // IO error, and Association.Terminate().
 // Note that s5i doesn't actually relays the UDP traffic.
 // Implement an associator yourself, or use Associator.
@@ -535,8 +535,8 @@ func (r *AssocRequest) accept(addr *Addr, port uint16, notify func(error)) *Asso
 	return a
 }
 
-// Association is provided for terminating the UDP association by closing the 
-// control connection. 
+// Association is provided for terminating the UDP association by closing the
+// control connection.
 type Association struct {
 	terminate func() error
 }

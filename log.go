@@ -22,16 +22,16 @@ type LogEntry struct {
 }
 
 func (e *LogEntry) Error() string {
-  if e == nil {
-    return "<nil>"
-  }
+	if e == nil {
+		return "<nil>"
+	}
 	return e.Err.Error()
 }
 
 func (e *LogEntry) Unwrap() error {
-  if e == nil {
-    return nil
-  }
+	if e == nil {
+		return nil
+	}
 	return e.Err
 }
 

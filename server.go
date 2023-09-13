@@ -17,11 +17,11 @@ const (
 	PeriodAutoDeny = time.Second * time.Duration(30)
 )
 
-// All methods provided by Server can be called simultanously. 
-// Use channel funcs (e.g. HandshakeChan) to deal with logging, requests e.t.c.. 
-// All channel funcs create a corresponding channel if not ever created. 
-// If no channel is created or channel is full, corresponding LogEntries are 
-// discarded, Handshakes, or requests are denied. 
+// All methods provided by Server can be called simultanously.
+// Use channel funcs (e.g. HandshakeChan) to deal with logging, requests e.t.c..
+// All channel funcs create a corresponding channel if not ever created.
+// If no channel is created or channel is full, corresponding LogEntries are
+// discarded, Handshakes, or requests are denied.
 type Server struct {
 	addr        *net.TCPAddr
 	listener    *net.TCPListener
@@ -124,8 +124,8 @@ func (s *Server) closeCloser(c closer) error {
 	return err
 }
 
-// Creates a channel for transfering LogEntries. Will create only once. 
-// LogEntries are discarded if channel is full or no channel is created. 
+// Creates a channel for transfering LogEntries. Will create only once.
+// LogEntries are discarded if channel is full or no channel is created.
 func (s *Server) LogChan() <-chan LogEntry {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -189,7 +189,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	hs.laddr = conn.LocalAddr()
 	hs.raddr = conn.RemoteAddr()
 
-  time.AfterFunc(PeriodAutoDeny, hs.Deny)
+	time.AfterFunc(PeriodAutoDeny, hs.Deny)
 	sent := s.selectMethod(&hs)
 
 	if !sent {
@@ -313,9 +313,9 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	if req.cmd != CmdCONNECT && req.cmd != CmdBIND && req.cmd != CmdASSOC {
 		req.deny(RepCmdNotSupported, emptyFQDN, zeroPort)
 	} else {
-    time.AfterFunc(PeriodAutoDeny, func() {
-      req.deny(RepGeneralFailure, emptyFQDN, zeroPort)
-    })
+		time.AfterFunc(PeriodAutoDeny, func() {
+			req.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+		})
 
 		sent = s.evaluateRequest(wrappedReq)
 
