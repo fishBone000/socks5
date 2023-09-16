@@ -92,3 +92,15 @@ func copyClose(s *Server, r io.ReadCloser, w io.WriteCloser) {
 	s.closeCloser(r)
 	s.closeCloser(w)
 }
+
+func mapIp2Tcp(ip string) string {
+  switch ip {
+  case "ip":
+    return "tcp"
+  case "ip4":
+    return "tcp4"
+  case "ip6":
+    return "tcp6"
+  }
+  return ip
+}

@@ -151,7 +151,10 @@ func (a *Addr) Network() string {
 
 func (a *Addr) String() string {
 	if a.Type == ATYPV4 || a.Type == ATYPV6 {
-		return net.IP(a.Bytes).String()
+    ip := net.IP(a.Bytes)
+    if ip != nil {
+      return ip.String()
+    }
 	}
 	if a.Type == ATYPDOMAIN {
 		return string(a.Bytes)
