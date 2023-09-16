@@ -17,6 +17,15 @@ type OpError struct {
 	Err        error // Inner error
 }
 
+func newOpErr(op string, addrSrc any, err error) *OpError {
+  e := &OpError{
+    Op: op,
+    Err: err,
+  }
+  e.fillAddr(addrSrc)
+  return e
+}
+
 func (e *OpError) Error() string {
 	// Yeah this is mostly copy-pasted from net.go, thanks Google!
 	if e == nil {
@@ -40,6 +49,21 @@ func (e *OpError) Error() string {
 
 func (e *OpError) Unwrap() error {
 	return e.Err
+}
+
+func (e *OpError) fillAddr(a any) *OpError {
+  switch x := a.(type) {
+  case net.Conn:
+    e.LocalAddr = x.LocalAddr()
+    e.RemoteAddr = x.RemoteAddr()
+  case net.Listener:
+    e.LocalAddr = x.Addr()
+    e.RemoteAddr = nil
+  default:
+    e.LocalAddr = nil
+    e.RemoteAddr = nil
+  }
+  return e
 }
 
 type CmdNotSupportedError struct {

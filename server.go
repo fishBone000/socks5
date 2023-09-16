@@ -1,25 +1,26 @@
-// Package socksy5 provides a SOCKS5 server that reads and sends SOCKS5 messages, 
-// act like a proxy when outbound connection is attached, 
-// but leaves handshake and  request decisions, outbound dialing, 
+// Package socksy5 provides a SOCKS5 server that reads and sends SOCKS5 messages,
+// act like a proxy when outbound connection is attached,
+// but leaves handshake and  request decisions, outbound dialing,
 // UDP relaying, subnegotiation e.t.c. to external code.
 //
-// This provides advantages when you need multi-homed BND or UDP ASSOCIATION 
-// processing, custom subnegotiation and encryption, attach special connection to 
-// CONNECT requests e.t.c.. 
+// This provides advantages when you need multi-homed BND or UDP ASSOCIATION
+// processing, custom subnegotiation and encryption, attach special connection to
+// CONNECT requests e.t.c..
 //
-// All methods in this package, except for the methods of [Addr], are safe 
-// to call simultanously. 
+// All methods in this package, except for the methods of [Addr], are safe
+// to call simultanously.
 package socksy5
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
 	"time"
 )
 
-// Constants for server policy. 
+// Constants for server policy.
 const (
 	// Channel capacity of all channels returned by Server's channel functions. 
 	ChanCap = 64
@@ -51,7 +52,6 @@ func (s *Server) Start(addr string) (err error) {
 	if s.started {
 		return nil
 	}
-	s.started = true // mux is not needed here
 
 	if s.addr, err = net.ResolveTCPAddr("tcp", addr); err != nil {
 		return err
@@ -60,6 +60,7 @@ func (s *Server) Start(addr string) (err error) {
 	if s.listener, err = net.ListenTCP(s.addr.Network(), s.addr); err != nil {
 		return err
 	}
+	s.started = true // mux is not needed here
 
 	s.regClosable(s.listener)
 	s.info(nil, "listener started at", s.listener.Addr())
@@ -80,7 +81,7 @@ func (s *Server) Close() {
 	defer s.mux.Unlock()
 	s.down = true
 	if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		s.warn(&OpError{Op: "close listener", Err: err})
+		s.warn(newOpErr("close listener", s.listener, err))
 	}
 	delete(s.closers, s.listener)
 }
@@ -92,13 +93,17 @@ func (s *Server) CloseAll() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.down = true
-	if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		s.warn(&OpError{Op: "close listener", Err: err})
-	}
-	delete(s.closers, s.listener)
 	for c := range s.closers {
 		if err := c.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			s.warn(&OpError{Op: "close conn", Err: err})
+      switch c.(type) {
+      case net.Listener:
+        s.warn(newOpErr("close listener", c, err))
+      case net.Conn:
+        s.warn(newOpErr("close conn", c, err))
+      default:
+        s.warn(newOpErr("close", c, err))
+        s.debug(newOpErr("close closer", nil, errors.New("closer is of unknown type: "+fmt.Sprintf("%#v", c))))
+      }
 		}
 		delete(s.closers, c)
 	}
@@ -122,14 +127,15 @@ func (s *Server) closeCloser(c closer) error {
 	}
 	err := c.Close()
 	if err != nil && !errors.Is(err, net.ErrClosed) {
-		switch c.(type) {
-		case net.Conn:
-			s.warn(&OpError{Op: "close conn", Err: err})
-		case net.Listener:
-			s.warn(&OpError{Op: "close listener", Err: err})
-		default:
-			s.warn(&OpError{Op: "close", Err: err})
-		}
+    switch c.(type) {
+    case net.Listener:
+      s.warn(newOpErr("close listener", c, err))
+    case net.Conn:
+      s.warn(newOpErr("close conn", c, err))
+    default:
+      s.warn(newOpErr("close", c, err))
+      s.debug(newOpErr("close closer", nil, errors.New("closer is of unknown type: "+fmt.Sprintf("%#v", c))))
+    }
 	}
 	s.delClosable(c)
 	return err
@@ -171,9 +177,10 @@ func (s *Server) listen() {
 			s.mux.Lock()
 			defer s.mux.Unlock()
 			if !s.down {
-				s.err(&OpError{Op: "listen", Err: err})
+				s.err(newOpErr("listen", s.listener, err))
 				s.down = true
 			}
+      s.delClosable(s.listener)
 			return
 		}
 
@@ -186,12 +193,7 @@ func (s *Server) listen() {
 func (s *Server) serveClient(conn *net.TCPConn) {
 	hs, err := readHandshake(conn)
 	if err != nil {
-		s.err(&OpError{
-			Op:         "read handshake",
-			LocalAddr:  conn.LocalAddr(),
-			RemoteAddr: conn.RemoteAddr(),
-			Err:        err,
-		})
+		s.err(newOpErr("read handshake", conn, err))
 		s.closeCloser(conn)
 		return
 	}
@@ -202,22 +204,14 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	sent := s.selectMethod(&hs)
 
 	if !sent {
-		s.warn(nil, &OpError{
-			Op:         "serve",
-			LocalAddr:  conn.LocalAddr(),
-			RemoteAddr: conn.RemoteAddr(),
-			Err:        &RequestNotHandledError{Type: "handshake"},
-		})
+    s.warn(nil, newOpErr("serve", conn, &RequestNotHandledError{ Type: "handshake"}))
 		s.closeCloser(conn)
 		return
 	}
 
 	hsReply := []byte{VerSOCKS5, hs.methodChosen}
 	if _, err := conn.Write(hsReply); err != nil {
-		s.err(&OpError{
-			Op:  "reply handshake",
-			Err: err,
-		})
+		s.err(newOpErr("reply handshake", conn, err))
 		s.closeCloser(conn)
 		return
 	}
@@ -230,22 +224,12 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 
 	capper, err := hs.neg.Negotiate(conn)
 	if err != nil {
-		e := &OpError{
-			Op:  "subnegotiate",
-			Err: err,
-		}
-		foo := new(net.OpError)
-		if errors.As(err, &foo) {
-			s.err(e)
-		} else {
-			e.LocalAddr = conn.LocalAddr()
-			e.RemoteAddr = conn.RemoteAddr()
-			if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrMalformed) {
-				s.warn(e)
-			} else {
-				s.err(e)
-			}
-		}
+		e := newOpErr("subnegotiate", conn, err)
+    if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrMalformed) {
+      s.warn(e)
+    } else {
+      s.err(e)
+    }
 
 		time.AfterFunc(PeriodClose, func() {
 			s.closeCloser(conn)
@@ -264,12 +248,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		if errors.As(err, &foo) {
 			s.err(err)
 		} else {
-			s.err(&OpError{
-				Op:         "read request",
-				LocalAddr:  conn.LocalAddr(),
-				RemoteAddr: conn.RemoteAddr(),
-				Err:        err,
-			})
+			s.err(newOpErr("read request", conn, err))
 		}
 		s.closeCloser(conn)
 		return
@@ -311,12 +290,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		wrappedReq = ar
 		req = &ar.Request
 	default:
-		s.warn(&OpError{
-			Op:         "serve",
-			LocalAddr:  conn.LocalAddr(),
-			RemoteAddr: conn.RemoteAddr(),
-			Err:        &CmdNotSupportedError{Cmd: req.cmd},
-		})
+		s.warn(newOpErr("serve", conn, &CmdNotSupportedError{Cmd: req.cmd}))
 	}
 
 	if req.cmd != CmdCONNECT && req.cmd != CmdBIND && req.cmd != CmdASSOC {
@@ -331,19 +305,14 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		if sent {
 			req.wg.Wait()
 		} else {
-			s.warn(&OpError{
-				Op:         "serve",
-				LocalAddr:  conn.LocalAddr(),
-				RemoteAddr: conn.RemoteAddr(),
-				Err:        &RequestNotHandledError{Type: cmdCode2Str(req.cmd)},
-			})
+			s.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmdCode2Str(req.cmd)}))
 			req.deny(RepGeneralFailure, emptyFQDN, zeroPort)
 		}
 	}
 
 	raw, _ := req.reply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
-		s.err(&OpError{Op: "reply request " + cmdCode2Str(req.cmd), Err: err})
+		s.err(newOpErr("reply request " + cmdCode2Str(req.cmd), conn, err))
 		s.closeCloser(conn)
 		return
 	}
@@ -399,7 +368,7 @@ func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
 
 	raw, _ := r.bindReply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
-		s.err(&OpError{Op: "reply BND(2nd)", Err: err})
+		s.err(newOpErr("reply BND(2nd)", conn, err))
 		s.closeCloser(conn)
 		return
 	}
