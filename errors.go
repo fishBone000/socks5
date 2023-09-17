@@ -87,5 +87,5 @@ func (e *RequestNotHandledError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("%s request not handled")
+	return fmt.Sprintf("%s request not handled", e.Type)
 }
