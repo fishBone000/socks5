@@ -74,5 +74,3 @@ func (b *Binder) Start(addr Addr, port uint16) (net.Addr, error) {
   b.l = l
   return l.Addr(), nil
 }
-
-func (b *Binder) Accept()

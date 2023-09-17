@@ -144,17 +144,14 @@ func (a *Addr) Network() string {
 	case ATYPV6:
 		return "ip6"
 	case ATYPDOMAIN:
-		return "fqdn"
+		return "ip"
 	}
 	return "unknown"
 }
 
 func (a *Addr) String() string {
 	if a.Type == ATYPV4 || a.Type == ATYPV6 {
-    ip := net.IP(a.Bytes)
-    if ip != nil {
-      return ip.String()
-    }
+    return net.IP(a.Bytes).String()
 	}
 	if a.Type == ATYPDOMAIN {
 		return string(a.Bytes)
@@ -171,23 +168,26 @@ func (a *Addr) cpy() *Addr {
 }
 
 // MarshalBinary returns raw bytes used in SOCKS5 traffic. (ATYP+ADDR)
-//
-// Always returns nil error.
 func (a *Addr) MarshalBinary() (data []byte, err error) {
 	if a.Type == ATYPDOMAIN {
 		var l int
-		if len(data) > 0xFF {
+		if len(a.Bytes) > 0xFF {
 			l = 0xFF
 		} else {
-			l = len(data)
+			l = len(a.Bytes)
 		}
 		data = make([]byte, 2+l)
 		data[1] = byte(l)
 		copy(data[2:], a.Bytes)
-	} else {
+	} else if a.Type == ATYPV4 || a.Type == ATYPV6 {
+    if a.Type == ATYPV4 && len(a.Bytes) != 4 || a.Type == ATYPV6 && len(a.Bytes) != 16 {
+      return nil, ErrMalformed
+    }
 		data = make([]byte, 1+len(a.Bytes))
 		copy(data[1:], a.Bytes)
-	}
+	} else {
+    return nil, ErrMalformed
+  }
 	data[0] = a.Type
 	return
 }
@@ -210,28 +210,28 @@ type Handshake struct {
 }
 
 func readHandshake(reader io.Reader) (Handshake, error) {
-	req := Handshake{
+	hs := Handshake{
 		wg:   new(sync.WaitGroup),
 		once: new(sync.Once),
 	}
 	var err error
-	req.ver, err = readByte(reader)
+	hs.ver, err = readByte(reader)
 	if err != nil {
 		return Handshake{}, err
 	}
-	if req.ver != VerSOCKS5 {
+	if hs.ver != VerSOCKS5 {
 		return Handshake{}, ErrMalformed
 	}
-	req.nmethods, err = readByte(reader)
+	hs.nmethods, err = readByte(reader)
 	if err != nil {
 		return Handshake{}, err
 	}
-	req.methods = make([]byte, req.nmethods)
-	_, err = fillBuffer(req.methods, reader)
+	hs.methods = make([]byte, hs.nmethods)
+	_, err = fillBuffer(hs.methods, reader)
 	if err != nil {
 		return Handshake{}, err
 	}
-	return req, nil
+	return hs, nil
 }
 
 // Accept accepts the handshake, but also instead denies the request silently
