@@ -22,8 +22,8 @@ type Binder struct {
 
 	conn net.Conn
 	l    net.Listener
-  addr Addr
-  port uint16
+	addr Addr
+	port uint16
 }
 
 // Start starts the binder. Start doesn't block.
@@ -36,15 +36,15 @@ type Binder struct {
 // if ATYP is ATYPDOMAIN
 // - return [net.UnknownNetworkError], if otherwise.
 func (b *Binder) Start(addr Addr, port uint16) (net.Addr, error) {
-  var l net.Listener
-  var err error
+	var l net.Listener
+	var err error
 
-  if b.HintAddr != nil {
-    l, err = net.Listen(
-      mapIp2Tcp(b.HintAddr.Network()),
-      b.HintAddr.String()+":"+strconv.Itoa(int(b.HintPort)),
-    )
-  }
+	if b.HintAddr != nil {
+		l, err = net.Listen(
+			mapIp2Tcp(b.HintAddr.Network()),
+			b.HintAddr.String()+":"+strconv.Itoa(int(b.HintPort)),
+		)
+	}
 
 	if err != nil || b.HintAddr == nil {
 		var laddr string
@@ -65,12 +65,12 @@ func (b *Binder) Start(addr Addr, port uint16) (net.Addr, error) {
 			laddr = "[::0]:0"
 		}
 
-    l, err = net.Listen("tcp", laddr)
+		l, err = net.Listen("tcp", laddr)
 	}
 
-  if err != nil {
-    return nil, err
-  }
-  b.l = l
-  return l.Addr(), nil
+	if err != nil {
+		return nil, err
+	}
+	b.l = l
+	return l.Addr(), nil
 }

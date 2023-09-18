@@ -524,8 +524,8 @@ func (r *BindRequest) denyBind(rep byte, addr *Addr, port uint16, timeoutDeny bo
 		r.bindReply = new(reply)
 		r.bindReply.bndAddr = addr
 		r.bindReply.bndPort = port
-    r.bindTimeoutDeny = timeoutDeny
-    r.bindWg.Done()
+		r.bindTimeoutDeny = timeoutDeny
+		r.bindWg.Done()
 	})
 }
 

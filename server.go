@@ -135,7 +135,7 @@ func (s *Server) closeCloser(c closer) error {
 	}
 	s.info(newOpErr("close "+closer2str(c), c, nil))
 	err := c.Close()
-	if err != nil && !errors.Is(err, net.ErrClosed){
+	if err != nil && !errors.Is(err, net.ErrClosed) {
 		s.warn(newOpErr("close "+closer2str(c), c, err))
 	}
 	s.delCloser(c)
@@ -358,13 +358,13 @@ func (s *Server) handleConnect(r *ConnectRequest, capper Capsulator, conn net.Co
 
 	s.info(newOpErr("relay CONNECT started "+relay2str(conn, r.conn), nil, nil))
 
-  go s.relay(capper, r.conn, func(err error) {
-    if err != nil {
-      s.err(newOpErr("relay CONNECT "+relay2str(conn, r.conn), nil, err))
-    } else {
-      s.info(newOpErr("relay CONNECT "+relay2str(conn, r.conn)+" EOF", nil, err))
-    }
-  })
+	go s.relay(capper, r.conn, func(err error) {
+		if err != nil {
+			s.err(newOpErr("relay CONNECT "+relay2str(conn, r.conn), nil, err))
+		} else {
+			s.info(newOpErr("relay CONNECT "+relay2str(conn, r.conn)+" EOF", nil, err))
+		}
+	})
 }
 
 func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
@@ -380,11 +380,11 @@ func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
 	})
 	r.bindWg.Wait()
 
-  if r.bindTimeoutDeny {
-    s.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmd2str(CmdBIND), Timeout: true}))
-  }
+	if r.bindTimeoutDeny {
+		s.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmd2str(CmdBIND), Timeout: true}))
+	}
 
-  s.dbg(newOpErr(fmt.Sprintf("reply %s to request BND(2nd)", rep2str(r.bindReply.rep)), conn, nil))
+	s.dbg(newOpErr(fmt.Sprintf("reply %s to request BND(2nd)", rep2str(r.bindReply.rep)), conn, nil))
 	raw, _ := r.bindReply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
 		s.err(newOpErr("reply BND(2nd)", conn, err))
@@ -394,13 +394,13 @@ func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
 
 	s.info(newOpErr("relay BND started "+relay2str(conn, r.conn), nil, nil))
 
-  go s.relay(capper, r.conn, func(err error) {
-    if err != nil {
-      s.err(newOpErr("relay BND  "+relay2str(conn, r.conn), nil, err))
-    } else {
-      s.info(newOpErr("relay BND  "+relay2str(conn, r.conn)+" EOF", nil, err))
-    }
-  })
+	go s.relay(capper, r.conn, func(err error) {
+		if err != nil {
+			s.err(newOpErr("relay BND  "+relay2str(conn, r.conn), nil, err))
+		} else {
+			s.info(newOpErr("relay BND  "+relay2str(conn, r.conn)+" EOF", nil, err))
+		}
+	})
 }
 
 func (s *Server) handleAssoc(r *AssocRequest, conn net.Conn) {
@@ -445,15 +445,15 @@ func (s *Server) evaluateRequest(r any) (sent bool) {
 }
 
 func (s *Server) relay(a, b io.ReadWriter, onErr func(error)) {
-  once := sync.Once{}
+	once := sync.Once{}
 
-  cpy := func(dst io.Writer, src io.Reader) {
-    _, err := io.Copy(dst, src)
-    once.Do(func() {
-      onErr(err)
-    })
-  }
+	cpy := func(dst io.Writer, src io.Reader) {
+		_, err := io.Copy(dst, src)
+		once.Do(func() {
+			onErr(err)
+		})
+	}
 
-  go cpy(a, b)
-  go cpy(b, a)
+	go cpy(a, b)
+	go cpy(b, a)
 }

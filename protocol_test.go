@@ -100,39 +100,39 @@ func FuzzReadHandshake(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, a []byte) {
 		Convey("read handshake", t, func() {
-      r := newSliceReader(a)
+			r := newSliceReader(a)
 
-      hs, err := readHandshake(r)
-      l := len(a)
+			hs, err := readHandshake(r)
+			l := len(a)
 
-      if l == 0 {
-        So(err, ShouldEqual, io.EOF)
-        return
-      }
+			if l == 0 {
+				So(err, ShouldEqual, io.EOF)
+				return
+			}
 
-      if l >= 1 && a[0] != VerSOCKS5 {
-        So(err, ShouldEqual, ErrMalformed)
-        return
-      }
+			if l >= 1 && a[0] != VerSOCKS5 {
+				So(err, ShouldEqual, ErrMalformed)
+				return
+			}
 
-      if l == 1 {
-        So(err, ShouldEqual, io.EOF)
-        return
-      }
+			if l == 1 {
+				So(err, ShouldEqual, io.EOF)
+				return
+			}
 
-      if 2+int(a[1]) > l {
-        So(err, ShouldEqual, io.EOF)
-        return
-      }
+			if 2+int(a[1]) > l {
+				So(err, ShouldEqual, io.EOF)
+				return
+			}
 
-      So(r.n, ShouldEqual, 2+int(a[1]))
-      So(err, ShouldBeNil)
-      So(hs.ver, ShouldEqual, VerSOCKS5)
-      So(hs.nmethods, ShouldEqual, a[1])
-      So(len(hs.methods), ShouldEqual, a[1])
-      So(hs.methods, ShouldEqual, a[2:2+int(a[1])])
-      So(hs.wg, ShouldNotBeNil)
-      So(hs.once, ShouldNotBeNil)
+			So(r.n, ShouldEqual, 2+int(a[1]))
+			So(err, ShouldBeNil)
+			So(hs.ver, ShouldEqual, VerSOCKS5)
+			So(hs.nmethods, ShouldEqual, a[1])
+			So(len(hs.methods), ShouldEqual, a[1])
+			So(hs.methods, ShouldEqual, a[2:2+int(a[1])])
+			So(hs.wg, ShouldNotBeNil)
+			So(hs.once, ShouldNotBeNil)
 
 		})
 	})
