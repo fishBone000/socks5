@@ -22,15 +22,15 @@ import (
 
 // Constants for server policy.
 const (
-	// Channel capacity of all channels returned by Server's channel functions. 
+	// Channel capacity of all channels returned by Server's channel functions.
 	ChanCap = 64
 	// Time to close connection if auth failed, request denied, e.t.c..
 	PeriodClose    = time.Second * time.Duration(3)
 	PeriodAutoDeny = time.Second * time.Duration(30)
 )
 
-// A Server is a SOCKS5 server interface. 
-// 
+// A Server is a SOCKS5 server interface.
+//
 // Use channel funcs (e.g. [Server.HandshakeChan]) to deal with logging, requests e.t.c..
 // All channel funcs create a corresponding channel if not ever created.
 // If no channel is created or channel is full, corresponding log entries are
@@ -47,7 +47,7 @@ type Server struct {
 	closers     map[closer]struct{}
 }
 
-// Start starts the Server. No-op if it has been started. 
+// Start starts the Server. No-op if it has been started.
 func (s *Server) Start(addr string) (err error) {
 	if s.started {
 		return nil
@@ -62,8 +62,8 @@ func (s *Server) Start(addr string) (err error) {
 	}
 	s.started = true // mux is not needed here
 
-	s.regClosable(s.listener)
-	s.info(nil, "listener started at", s.listener.Addr())
+	s.regCloser(s.listener)
+	s.info(nil, "server started, listening for", s.listener.Addr())
 
 	go s.listen()
 	return
@@ -75,69 +75,70 @@ func (s *Server) Running() bool {
 	return s.started && !s.down
 }
 
-// Close closes the internal listener. Connections established are not closed. 
+// Close closes the internal listener. Connections established are not closed.
 func (s *Server) Close() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.down = true
+	s.info(newOpErr("server shut down", nil, nil))
 	if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		s.warn(newOpErr("close listener", s.listener, err))
 	}
-	delete(s.closers, s.listener)
+	s.delCloserNoLock(s.listener)
 }
 
 // CloseAll closes the internal listener and all established connections.
-// If a connection has failed to close, 
-// the [Server] won't try to close it next time. 
+// If a connection has failed to close,
+// the [Server] won't try to close it next time.
 func (s *Server) CloseAll() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.down = true
+	s.info(newOpErr("server shut down", nil, nil))
 	for c := range s.closers {
-		if err := c.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-      switch c.(type) {
-      case net.Listener:
-        s.warn(newOpErr("close listener", c, err))
-      case net.Conn:
-        s.warn(newOpErr("close conn", c, err))
-      default:
-        s.warn(newOpErr("close", c, err))
-        s.debug(newOpErr("close closer", nil, errors.New("closer is of unknown type: "+fmt.Sprintf("%#v", c))))
-      }
+		s.info(newOpErr("close "+closer2str(c), c, nil))
+		err := c.Close()
+		if err != nil {
+			s.warn(err, newOpErr("close "+closer2str(c), c, err))
 		}
-		delete(s.closers, c)
+		s.delCloserNoLock(c)
 	}
 }
 
-func (s *Server) regClosable(c closer) {
+func (s *Server) regCloser(c closer) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.closers[c] = struct{}{}
+	s.dbgvv(nil, fmt.Sprintf("reg closer %#v", c))
 }
 
-func (s *Server) delClosable(c closer) {
+func (s *Server) regCloserNoLock(c closer) {
+	s.closers[c] = struct{}{}
+	s.dbgvv(nil, fmt.Sprintf("reg closer without locking %#v", c))
+}
+
+func (s *Server) delCloser(c closer) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	delete(s.closers, c)
+	s.dbgvv(nil, fmt.Sprintf("del closer %#v", c))
+}
+
+func (s *Server) delCloserNoLock(c closer) {
+	delete(s.closers, c)
+	s.dbgvv(nil, fmt.Sprintf("del closer without locking %#v", c))
 }
 
 func (s *Server) closeCloser(c closer) error {
 	if c == nil {
 		return nil
 	}
+	s.info(newOpErr("close "+closer2str(c), c, nil))
 	err := c.Close()
-	if err != nil && !errors.Is(err, net.ErrClosed) {
-    switch c.(type) {
-    case net.Listener:
-      s.warn(newOpErr("close listener", c, err))
-    case net.Conn:
-      s.warn(newOpErr("close conn", c, err))
-    default:
-      s.warn(newOpErr("close", c, err))
-      s.debug(newOpErr("close closer", nil, errors.New("closer is of unknown type: "+fmt.Sprintf("%#v", c))))
-    }
+	if err != nil && !errors.Is(err, net.ErrClosed){
+		s.warn(newOpErr("close "+closer2str(c), c, err))
 	}
-	s.delClosable(c)
+	s.delCloser(c)
 	return err
 }
 
@@ -159,7 +160,7 @@ func (s *Server) HandshakeChan() <-chan *Handshake {
 	return (<-chan *Handshake)(s.hndshkChan)
 }
 
-// RequestChan is guaranteed to return a channel that receives one of 
+// RequestChan is guaranteed to return a channel that receives one of
 // [*ConnectRequest], [*BindRequest] and [*AssocRequest].
 func (s *Server) RequestChan() <-chan any {
 	s.mux.Lock()
@@ -180,11 +181,12 @@ func (s *Server) listen() {
 				s.err(newOpErr("listen", s.listener, err))
 				s.down = true
 			}
-      s.delClosable(s.listener)
+			s.delCloser(s.listener)
 			return
 		}
 
-		s.regClosable(conn)
+		s.info(newOpErr("new connection", conn, nil))
+		s.regCloser(conn)
 
 		go s.serveClient(conn)
 	}
@@ -200,14 +202,19 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	hs.laddr = conn.LocalAddr()
 	hs.raddr = conn.RemoteAddr()
 
-	time.AfterFunc(PeriodAutoDeny, hs.Deny)
+	time.AfterFunc(PeriodAutoDeny, func() {
+		hs.deny(true)
+	})
+	s.dbgv(newOpErr("select method from one of ", conn, nil))
 	sent := s.selectMethod(&hs)
 
-	if !sent {
-    s.warn(nil, newOpErr("serve", conn, &RequestNotHandledError{ Type: "handshake"}))
+	if !sent || hs.timeoutDeny {
+		s.warn(nil, newOpErr("serve", conn, &RequestNotHandledError{Type: "handshake", Timeout: hs.timeoutDeny}))
 		s.closeCloser(conn)
 		return
 	}
+
+	s.dbgv(newOpErr("selected method "+method2Str(hs.methodChosen), conn, nil))
 
 	hsReply := []byte{VerSOCKS5, hs.methodChosen}
 	if _, err := conn.Write(hsReply); err != nil {
@@ -222,14 +229,15 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		return
 	}
 
+	s.dbg(newOpErr(fmt.Sprintf("start subnegotiation %T", hs.neg), conn, nil))
 	capper, err := hs.neg.Negotiate(conn)
 	if err != nil {
 		e := newOpErr("subnegotiate", conn, err)
-    if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrMalformed) {
-      s.warn(e)
-    } else {
-      s.err(e)
-    }
+		if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrMalformed) {
+			s.warn(e)
+		} else {
+			s.err(e)
+		}
 
 		time.AfterFunc(PeriodClose, func() {
 			s.closeCloser(conn)
@@ -241,18 +249,17 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	if capper == nil {
 		capper = NoCap{}
 	}
+	s.dbgv(newOpErr(fmt.Sprintf("using capsulation %T", capper), conn, nil))
 
 	req, err := readRequest(capper)
 	if err != nil {
-		foo := new(net.OpError)
-		if errors.As(err, &foo) {
-			s.err(err)
-		} else {
-			s.err(newOpErr("read request", conn, err))
-		}
+		s.err(newOpErr("read request", conn, err))
 		s.closeCloser(conn)
 		return
 	}
+
+	s.dbg(newOpErr("received request "+cmd2str(req.cmd), conn, nil))
+	s.dbgv(newOpErr("reply to request sent", conn, nil))
 
 	req.laddr = conn.LocalAddr()
 	req.raddr = conn.RemoteAddr()
@@ -294,27 +301,37 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	}
 
 	if req.cmd != CmdCONNECT && req.cmd != CmdBIND && req.cmd != CmdASSOC {
-		req.deny(RepCmdNotSupported, emptyFQDN, zeroPort)
+		req.deny(RepCmdNotSupported, emptyFQDN, zeroPort, false)
 	} else {
 		time.AfterFunc(PeriodAutoDeny, func() {
-			req.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+			req.deny(RepGeneralFailure, emptyFQDN, zeroPort, true)
 		})
 
+		s.dbgv(newOpErr("evaluate request "+cmd2str(req.cmd), conn, nil))
 		sent = s.evaluateRequest(wrappedReq)
 
 		if sent {
 			req.wg.Wait()
 		} else {
-			s.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmdCode2Str(req.cmd)}))
-			req.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+			s.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmd2str(req.cmd)}))
+			req.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		}
 	}
+	if req.timeoutDeny {
+		s.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmd2str(req.cmd), Timeout: true}))
+	}
+
+	s.dbg(newOpErr(fmt.Sprintf("reply %s to request %s", rep2str(req.reply.rep), cmd2str(req.cmd)), conn, nil))
 
 	raw, _ := req.reply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
-		s.err(newOpErr("reply request " + cmdCode2Str(req.cmd), conn, err))
+		s.err(newOpErr("reply request", conn, err))
 		s.closeCloser(conn)
 		return
+	}
+
+	if req.reply.rep != RepSucceeded {
+		s.dbg(newOpErr(fmt.Sprintf("reply %s to request %s", rep2str(req.reply.rep), cmd2str(req.cmd)), conn, nil))
 	}
 
 	switch req.cmd {
@@ -337,23 +354,17 @@ func (s *Server) handleConnect(r *ConnectRequest, capper Capsulator, conn net.Co
 		return
 	}
 
-	s.regClosable(r.conn)
+	s.regCloser(r.conn)
 
-	infoOnce := sync.OnceFunc(func() {
-		s.info(nil, "CONNECT connection closed. ")
-	})
-	go func() {
-		io.Copy(capper, conn)
-		infoOnce()
-		s.closeCloser(r.conn)
-		s.closeCloser(conn)
-	}()
-	go func() {
-		io.Copy(conn, capper)
-		infoOnce()
-		s.closeCloser(r.conn)
-		s.closeCloser(conn)
-	}()
+	s.info(newOpErr("relay CONNECT started "+relay2str(conn, r.conn), nil, nil))
+
+  go s.relay(capper, r.conn, func(err error) {
+    if err != nil {
+      s.err(newOpErr("relay CONNECT "+relay2str(conn, r.conn), nil, err))
+    } else {
+      s.info(newOpErr("relay CONNECT "+relay2str(conn, r.conn)+" EOF", nil, err))
+    }
+  })
 }
 
 func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
@@ -364,8 +375,16 @@ func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
 		return
 	}
 
+	time.AfterFunc(PeriodAutoDeny, func() {
+		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort, true)
+	})
 	r.bindWg.Wait()
 
+  if r.bindTimeoutDeny {
+    s.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmd2str(CmdBIND), Timeout: true}))
+  }
+
+  s.dbg(newOpErr(fmt.Sprintf("reply %s to request BND(2nd)", rep2str(r.bindReply.rep)), conn, nil))
 	raw, _ := r.bindReply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
 		s.err(newOpErr("reply BND(2nd)", conn, err))
@@ -373,21 +392,15 @@ func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
 		return
 	}
 
-	infoOnce := sync.OnceFunc(func() {
-		s.info(nil, "BND connection closed. ") // TODO make info util
-	})
-	go func() {
-		io.Copy(capper, r.conn)
-		infoOnce()
-		s.closeCloser(r.conn)
-		s.closeCloser(conn)
-	}()
-	go func() {
-		io.Copy(r.conn, capper)
-		infoOnce()
-		s.closeCloser(r.conn)
-		s.closeCloser(conn)
-	}()
+	s.info(newOpErr("relay BND started "+relay2str(conn, r.conn), nil, nil))
+
+  go s.relay(capper, r.conn, func(err error) {
+    if err != nil {
+      s.err(newOpErr("relay BND  "+relay2str(conn, r.conn), nil, err))
+    } else {
+      s.info(newOpErr("relay BND  "+relay2str(conn, r.conn)+" EOF", nil, err))
+    }
+  })
 }
 
 func (s *Server) handleAssoc(r *AssocRequest, conn net.Conn) {
@@ -429,4 +442,18 @@ func (s *Server) evaluateRequest(r any) (sent bool) {
 		s.mux.Unlock()
 	}
 	return
+}
+
+func (s *Server) relay(a, b io.ReadWriter, onErr func(error)) {
+  once := sync.Once{}
+
+  cpy := func(dst io.Writer, src io.Reader) {
+    _, err := io.Copy(dst, src)
+    once.Do(func() {
+      onErr(err)
+    })
+  }
+
+  go cpy(a, b)
+  go cpy(b, a)
 }

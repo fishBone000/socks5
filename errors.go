@@ -6,24 +6,24 @@ import (
 	"net"
 )
 
-// ErrMalformed is returned when request/response does not follow SOCKS5 protocol. 
+// ErrMalformed is returned when request/response does not follow SOCKS5 protocol.
 var ErrMalformed = errors.New("malformed")
 
-// An OpError contains Op string describing in which operation has the error occured. 
+// An OpError contains Op string describing in which operation has the error occured.
 type OpError struct {
-	Op         string // E.g. "read handshake", "serve", "close listener". 
+	Op         string // E.g. "read handshake", "serve", "close listener".
 	LocalAddr  net.Addr
 	RemoteAddr net.Addr
 	Err        error // Inner error
 }
 
 func newOpErr(op string, addrSrc any, err error) *OpError {
-  e := &OpError{
-    Op: op,
-    Err: err,
-  }
-  e.fillAddr(addrSrc)
-  return e
+	e := &OpError{
+		Op:  op,
+		Err: err,
+	}
+	e.fillAddr(addrSrc)
+	return e
 }
 
 func (e *OpError) Error() string {
@@ -32,18 +32,25 @@ func (e *OpError) Error() string {
 		return "<nil>"
 	}
 	s := e.Op
-	if e.LocalAddr != nil {
-		s += " " + e.LocalAddr.String()
-	}
-	if e.RemoteAddr != nil {
+
+	// Skip addr if inner err is net.OpError,
+	// because net.OpError usually already contains addr info
+	if _, ok := e.Err.(*net.OpError); !ok {
 		if e.LocalAddr != nil {
-			s += "->"
-		} else {
-			s += " "
+			s += " " + e.LocalAddr.String()
 		}
-		s += e.RemoteAddr.String()
+		if e.RemoteAddr != nil {
+			if e.LocalAddr != nil {
+				s += "->"
+			} else {
+				s += " "
+			}
+			s += e.RemoteAddr.String()
+		}
 	}
-	s += ": " + e.Err.Error()
+	if e.Err != nil {
+		s += ": " + e.Err.Error()
+	}
 	return s
 }
 
@@ -52,18 +59,18 @@ func (e *OpError) Unwrap() error {
 }
 
 func (e *OpError) fillAddr(a any) *OpError {
-  switch x := a.(type) {
-  case net.Conn:
-    e.LocalAddr = x.LocalAddr()
-    e.RemoteAddr = x.RemoteAddr()
-  case net.Listener:
-    e.LocalAddr = x.Addr()
-    e.RemoteAddr = nil
-  default:
-    e.LocalAddr = nil
-    e.RemoteAddr = nil
-  }
-  return e
+	switch x := a.(type) {
+	case net.Conn:
+		e.LocalAddr = x.LocalAddr()
+		e.RemoteAddr = x.RemoteAddr()
+	case net.Listener:
+		e.LocalAddr = x.Addr()
+		e.RemoteAddr = nil
+	default:
+		e.LocalAddr = nil
+		e.RemoteAddr = nil
+	}
+	return e
 }
 
 type CmdNotSupportedError struct {
@@ -77,10 +84,11 @@ func (e *CmdNotSupportedError) Error() string {
 	return fmt.Sprintf("CMD 0x%02X not supported", e.Cmd)
 }
 
-// A RequestNotHandledError can be received from the error channel when a handshake 
-// or request is not handled by external code. 
+// A RequestNotHandledError can be received from the error channel when a handshake
+// or request is not handled by external code.
 type RequestNotHandledError struct {
-	Type string // One of "handshake", "CONNECT", "BIND", "UDP ASSOCIATE"
+	Type    string // One of "handshake", "CONNECT", "BIND", "UDP ASSOCIATE"
+	Timeout bool   // If the request is not handled in a duration of PeriodAutoDeny
 }
 
 func (e *RequestNotHandledError) Error() string {

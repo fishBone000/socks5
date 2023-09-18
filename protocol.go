@@ -134,9 +134,9 @@ func parseHostPort(addr string) (*Addr, uint16) {
 
 // Network returns "ip4" if ATYP byte value is ATYPV4, "ip6" if ATYPV6,
 // "ip" if ATYPDOMAIN,
-// "unknown" otherwise, 
-// though [Server] will consider it malformed if the received ATYP is not one of 
-// the three known address types. 
+// "unknown" otherwise,
+// though [Server] will consider it malformed if the received ATYP is not one of
+// the three known address types.
 func (a *Addr) Network() string {
 	switch a.Type {
 	case ATYPV4:
@@ -150,8 +150,11 @@ func (a *Addr) Network() string {
 }
 
 func (a *Addr) String() string {
+	if a == nil {
+		return "<nil>"
+	}
 	if a.Type == ATYPV4 || a.Type == ATYPV6 {
-    return net.IP(a.Bytes).String()
+		return net.IP(a.Bytes).String()
 	}
 	if a.Type == ATYPDOMAIN {
 		return string(a.Bytes)
@@ -180,14 +183,14 @@ func (a *Addr) MarshalBinary() (data []byte, err error) {
 		data[1] = byte(l)
 		copy(data[2:], a.Bytes)
 	} else if a.Type == ATYPV4 || a.Type == ATYPV6 {
-    if a.Type == ATYPV4 && len(a.Bytes) != 4 || a.Type == ATYPV6 && len(a.Bytes) != 16 {
-      return nil, ErrMalformed
-    }
+		if a.Type == ATYPV4 && len(a.Bytes) != 4 || a.Type == ATYPV6 && len(a.Bytes) != 16 {
+			return nil, ErrMalformed
+		}
 		data = make([]byte, 1+len(a.Bytes))
 		copy(data[1:], a.Bytes)
 	} else {
-    return nil, ErrMalformed
-  }
+		return nil, ErrMalformed
+	}
 	data[0] = a.Type
 	return
 }
@@ -204,9 +207,10 @@ type Handshake struct {
 	laddr        net.Addr
 	raddr        net.Addr
 
-	wg   *sync.WaitGroup
-	once *sync.Once
-	neg  Subnegotiator
+	wg          *sync.WaitGroup
+	once        *sync.Once
+	neg         Subnegotiator
+	timeoutDeny bool
 }
 
 func readHandshake(reader io.Reader) (Handshake, error) {
@@ -240,7 +244,7 @@ func readHandshake(reader io.Reader) (Handshake, error) {
 // Can be called only once, furthur calls are no-op.
 func (r *Handshake) Accept(method byte, neg Subnegotiator) {
 	if neg == nil && method != MethodNoAuth || method == MethodNoAccepted {
-		r.deny()
+		r.deny(false)
 		return
 	}
 	for _, m := range r.methods {
@@ -249,7 +253,7 @@ func (r *Handshake) Accept(method byte, neg Subnegotiator) {
 			return
 		}
 	}
-	r.deny()
+	r.deny(false)
 }
 
 func (r *Handshake) accept(method byte, neg Subnegotiator) {
@@ -260,20 +264,21 @@ func (r *Handshake) accept(method byte, neg Subnegotiator) {
 }
 
 // Deny denies the handshake by returning NO ACCEPTABLE METHODS.
-// 
+//
 // Can be called only once, furthur calls are no-op.
 func (r *Handshake) Deny() {
-	r.deny()
+	r.deny(false)
 }
 
-func (r *Handshake) deny() {
+func (r *Handshake) deny(timeoutDeny bool) {
 	r.once.Do(func() {
 		r.methodChosen = MethodNoAccepted
+		r.timeoutDeny = true
 		r.wg.Done()
 	})
 }
 
-// Methods returns client's supported auth methods. 
+// Methods returns client's supported auth methods.
 // Methods might return no method.
 func (r *Handshake) Methods() []byte {
 	s := make([]byte, len(r.methods))
@@ -289,15 +294,15 @@ func (r *Handshake) RemoteAddr() net.Addr {
 	return r.raddr
 }
 
-// A Request represents a client request. 
+// A Request represents a client request.
 // Use [ConnectRequest] e.t.c. for manipulation.
-// 
+//
 // All different types of requests can be accepted / denied only once. Furthur
-// calls are no-op. 
-// 
+// calls are no-op.
+//
 // Requests are denied silently if params passed to Accept funcs are invalid, e.g.
 // addr string doesn't contain a port number, net.Addr returned by conn is invalid.
-// 
+//
 // A Request will be denied automatically if it's not accepted or denied
 // after [PeriodAutoDeny].
 type Request struct {
@@ -305,11 +310,12 @@ type Request struct {
 	dstAddr *Addr
 	dstPort uint16 // Native byte order
 
-	raddr net.Addr
-	laddr net.Addr
-	once  *sync.Once
-	wg    *sync.WaitGroup
-	reply *reply
+	raddr       net.Addr
+	laddr       net.Addr
+	once        *sync.Once
+	wg          *sync.WaitGroup
+	reply       *reply
+	timeoutDeny bool
 }
 
 func readRequest(reader io.Reader) (*Request, error) {
@@ -355,31 +361,31 @@ func (r *Request) RemoteAddr() net.Addr {
 	return r.raddr
 }
 
-// DstAddr returns the DST.ADDR field in the request message. 
+// DstAddr returns the DST.ADDR field in the request message.
 func (r *Request) DstAddr() *Addr {
 	return r.dstAddr.cpy()
 }
 
-// DstAddr returns the DST.PORT field in the request message. 
+// DstAddr returns the DST.PORT field in the request message.
 func (r *Request) DstPort() uint16 {
 	return r.dstPort
 }
 
 // Deny denies the request with REP byte code.
 // If rep is RepSucceeded, it's replaced by RepGeneralFailure.
-// 
+//
 // addr is used for BND fields. If addr is invalid, BND.ADDR
 // will be set to empty domain name, and BND.PORT set to 0.
 func (r *Request) Deny(rep byte, addr string) {
 	a, port := parseHostPort(addr)
 	if a == nil {
-		r.deny(rep, emptyFQDN, zeroPort)
+		r.deny(rep, emptyFQDN, zeroPort, false)
 		return
 	}
-	r.deny(rep, a, port)
+	r.deny(rep, a, port, false)
 }
 
-func (r *Request) deny(rep byte, addr *Addr, port uint16) {
+func (r *Request) deny(rep byte, addr *Addr, port uint16, timeoutDeny bool) {
 	r.once.Do(func() {
 		if rep == RepSucceeded {
 			r.reply.rep = RepGeneralFailure
@@ -388,6 +394,7 @@ func (r *Request) deny(rep byte, addr *Addr, port uint16) {
 		}
 		r.reply.bndAddr = addr
 		r.reply.bndPort = port
+		r.timeoutDeny = timeoutDeny
 		r.wg.Done()
 	})
 }
@@ -401,12 +408,12 @@ type ConnectRequest struct {
 // Port 0 is valid and will be sent as-is.
 func (r *ConnectRequest) Accept(conn net.Conn) {
 	if conn == nil || conn.LocalAddr() == nil {
-		r.deny(RepGeneralFailure, emptyFQDN.cpy(), zeroPort)
+		r.deny(RepGeneralFailure, emptyFQDN.cpy(), zeroPort, false)
 		return
 	}
 	addr, port := parseHostPort(conn.LocalAddr().String())
 	if addr == nil {
-		r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+		r.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		return
 	}
 	r.accept(conn, addr, port)
@@ -423,23 +430,24 @@ func (r *ConnectRequest) accept(conn net.Conn, addr *Addr, port uint16) {
 
 type BindRequest struct {
 	Request
-	conn      net.Conn
-	bindMux   sync.Mutex // To avoid simultainous rw on reply field, Bind uses it to check if the request is accepted. 
-	bindWg    sync.WaitGroup
-	bindOnce  sync.Once
-	bindReply *reply
+	conn            net.Conn
+	bindMux         sync.Mutex // To avoid simultainous rw on reply field, Bind uses it to check if the request is accepted.
+	bindWg          sync.WaitGroup
+	bindOnce        sync.Once
+	bindReply       *reply
+	bindTimeoutDeny bool
 }
 
 // Accept accepts the request, and tells the client which address the SOCKS server
 // will listen on. This is the first reply from the server.
-// 
+//
 // Note that [Server] doesn't actually listens it for you. You can implement a
 // listener yourself or use Binder.
 // Port 0 is valid and will be sent as-is.
 func (r *BindRequest) Accept(addr string) {
 	a, port := parseHostPort(addr)
 	if a == nil {
-		r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+		r.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		return
 	}
 	r.accept(a, port)
@@ -457,7 +465,7 @@ func (r *BindRequest) accept(addr *Addr, port uint16) {
 }
 
 // Bind binds the client. This is the second reply from the server.
-// 
+//
 // No-op if the first reply is not decided.
 // Request is denied if conn is nil.
 // Port 0 is valid and will be sent as-is.
@@ -469,12 +477,12 @@ func (r *BindRequest) Bind(conn net.Conn) {
 	}
 
 	if conn == nil || conn.LocalAddr() == nil {
-		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort)
+		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		return
 	}
 	addr, port := parseHostPort(conn.LocalAddr().String())
 	if addr == nil {
-		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort)
+		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		return
 	}
 	r.bind(conn, addr, port)
@@ -489,7 +497,7 @@ func (r *BindRequest) bind(conn net.Conn, addr *Addr, port uint16) {
 	})
 }
 
-// DenyBind denies the request. 
+// DenyBind denies the request.
 // No-op if the first reply is not decided.
 func (r *BindRequest) DenyBind(rep byte, addr string) {
 	r.bindMux.Lock()
@@ -500,13 +508,13 @@ func (r *BindRequest) DenyBind(rep byte, addr string) {
 
 	a, port := parseHostPort(addr)
 	if a == nil {
-		r.deny(rep, emptyFQDN, zeroPort)
+		r.deny(rep, emptyFQDN, zeroPort, false)
 	} else {
-		r.deny(rep, a, port)
+		r.deny(rep, a, port, false)
 	}
 }
 
-func (r *BindRequest) denyBind(rep byte, addr *Addr, port uint16) {
+func (r *BindRequest) denyBind(rep byte, addr *Addr, port uint16, timeoutDeny bool) {
 	r.bindOnce.Do(func() {
 		if rep == RepSucceeded {
 			r.bindReply.rep = RepGeneralFailure
@@ -516,6 +524,8 @@ func (r *BindRequest) denyBind(rep byte, addr *Addr, port uint16) {
 		r.bindReply = new(reply)
 		r.bindReply.bndAddr = addr
 		r.bindReply.bndPort = port
+    r.bindTimeoutDeny = timeoutDeny
+    r.bindWg.Done()
 	})
 }
 
@@ -526,29 +536,29 @@ type AssocRequest struct {
 	terminate  func() error
 }
 
-// Accept accepts the request. 
-// 
-// notify is called when the association terminates, e.g. TCP disconnection,
-// IO error. 
+// Accept accepts the request.
 //
-// terminator can be used to terminate the association by closing the control 
-// connection. Be aware it is nil if Accept is no-op. 
-// 
+// notify is called when the association terminates, e.g. TCP disconnection,
+// IO error.
+//
+// terminator can be used to terminate the association by closing the control
+// connection. Be aware it is nil if Accept is no-op.
+//
 // Note that [Server] doesn't actually relays the UDP traffic.
 // Implement an associator yourself, or use [Associator].
-// 
+//
 // Port 0 is valid and will be sent as-is.
 func (r *AssocRequest) Accept(addr string, notify func(reason error)) (terminator func() error) {
 	a, port := parseHostPort(addr)
 	if a == nil {
-		r.deny(RepGeneralFailure, emptyFQDN, zeroPort)
+		r.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		return nil
 	}
 	return r.accept(a, port, notify)
 }
 
 func (r *AssocRequest) accept(addr *Addr, port uint16, notify func(error)) (terminator func() error) {
-  var t func() error
+	var t func() error
 	r.once.Do(func() {
 		r.notify = notify
 
