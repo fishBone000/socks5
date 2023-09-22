@@ -603,6 +603,7 @@ func (t *tester) rcvReq() any {
 
 func (t *tester) testConnect(req *ConnectRequest) {
   if t.rep1 == RepSucceeded {
+    // a, b := newPipeConn()
   }
 }
 

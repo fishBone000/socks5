@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"io"
 	"math/rand"
+	"net"
 )
 
 type sliceReader struct {
@@ -57,4 +58,23 @@ func randIntExcept(n int, not ...int) int {
 		m = rand.Intn(n)
 	}
 	return m
+}
+
+type pipeConn struct {
+  r *io.PipeReader
+  w *io.PipeWriter
+  laddr net.Addr
+  raddr net.Addr
+}
+
+func newPipeConn(addrA, addrB net.Addr) (a, b *pipeConn) {
+  a = new(pipeConn)
+  b = new(pipeConn)
+  a.r, b.w = io.Pipe()
+  b.r, a.w = io.Pipe()
+  a.laddr = addrA
+  a.raddr = addrB
+  b.laddr = addrB
+  b.raddr = addrA
+  return
 }
