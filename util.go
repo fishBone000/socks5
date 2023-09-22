@@ -25,6 +25,7 @@ func err(err error, a ...any) error {
 	return fmt.Errorf("%s: %w", fmt.Sprint(a...), err)
 }
 
+// TODO Replace it with io.ReadFull
 func fillBuffer(b []byte, reader io.Reader) (n int, err error) {
 	for n < len(b) && err == nil {
 		var n1 int
@@ -183,4 +184,13 @@ func mapIp2Tcp(ip string) string {
 		return "tcp6"
 	}
 	return ip
+}
+
+func isIntOneOf(a int, ints... int) bool {
+  for _, v := range ints {
+    if a == v {
+      return true
+    }
+  }
+  return false
 }

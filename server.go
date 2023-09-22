@@ -75,6 +75,13 @@ func (s *Server) Running() bool {
 	return s.started && !s.down
 }
 
+func (s *Server) Addr() net.Addr {
+  if s.listener == nil {
+    return nil
+  }
+  return s.listener.Addr()
+}
+
 // Close closes the internal listener. Connections established are not closed.
 func (s *Server) Close() {
 	s.mux.Lock()

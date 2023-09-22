@@ -279,7 +279,8 @@ func (r *Handshake) deny(timeoutDeny bool) {
 }
 
 // Methods returns client's supported auth methods.
-// Methods might return no method.
+// Methods might return no method,
+// or include method code 0xFF if the client did send so.
 func (r *Handshake) Methods() []byte {
 	s := make([]byte, len(r.methods))
 	copy(s, r.methods)
@@ -298,7 +299,7 @@ func (r *Handshake) RemoteAddr() net.Addr {
 // Use [ConnectRequest] e.t.c. for manipulation.
 //
 // All different types of requests can be accepted / denied only once. Furthur
-// calls are no-op.
+// calls are no-op and return ok with false.
 //
 // Requests are denied silently if params passed to Accept funcs are invalid, e.g.
 // addr string doesn't contain a port number, net.Addr returned by conn is invalid.
@@ -376,16 +377,15 @@ func (r *Request) DstPort() uint16 {
 //
 // addr is used for BND fields. If addr is invalid, BND.ADDR
 // will be set to empty domain name, and BND.PORT set to 0.
-func (r *Request) Deny(rep byte, addr string) {
+func (r *Request) Deny(rep byte, addr string) (ok bool) {
 	a, port := parseHostPort(addr)
 	if a == nil {
-		r.deny(rep, emptyFQDN, zeroPort, false)
-		return
+		return r.deny(rep, emptyFQDN, zeroPort, false)
 	}
-	r.deny(rep, a, port, false)
+	return r.deny(rep, a, port, false)
 }
 
-func (r *Request) deny(rep byte, addr *Addr, port uint16, timeoutDeny bool) {
+func (r *Request) deny(rep byte, addr *Addr, port uint16, timeoutDeny bool) (ok bool) {
 	r.once.Do(func() {
 		if rep == RepSucceeded {
 			r.reply.rep = RepGeneralFailure
@@ -396,7 +396,9 @@ func (r *Request) deny(rep byte, addr *Addr, port uint16, timeoutDeny bool) {
 		r.reply.bndPort = port
 		r.timeoutDeny = timeoutDeny
 		r.wg.Done()
+		ok = true
 	})
+	return
 }
 
 type ConnectRequest struct {
@@ -406,7 +408,7 @@ type ConnectRequest struct {
 
 // Accept accepts the request, and starts proxying.
 // Port 0 is valid and will be sent as-is.
-func (r *ConnectRequest) Accept(conn net.Conn) {
+func (r *ConnectRequest) Accept(conn net.Conn) (ok bool) {
 	if conn == nil || conn.LocalAddr() == nil {
 		r.deny(RepGeneralFailure, emptyFQDN.cpy(), zeroPort, false)
 		return
@@ -416,16 +418,18 @@ func (r *ConnectRequest) Accept(conn net.Conn) {
 		r.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		return
 	}
-	r.accept(conn, addr, port)
+	return r.accept(conn, addr, port)
 }
 
-func (r *ConnectRequest) accept(conn net.Conn, addr *Addr, port uint16) {
+func (r *ConnectRequest) accept(conn net.Conn, addr *Addr, port uint16) (ok bool) {
 	r.once.Do(func() {
 		r.conn = conn
 		r.reply.bndAddr = addr
 		r.reply.bndPort = port
 		r.wg.Done()
+		ok = true
 	})
+	return
 }
 
 type BindRequest struct {
@@ -444,16 +448,16 @@ type BindRequest struct {
 // Note that [Server] doesn't actually listens it for you. You can implement a
 // listener yourself or use Binder.
 // Port 0 is valid and will be sent as-is.
-func (r *BindRequest) Accept(addr string) {
+func (r *BindRequest) Accept(addr string) (ok bool) {
 	a, port := parseHostPort(addr)
 	if a == nil {
 		r.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		return
 	}
-	r.accept(a, port)
+	return r.accept(a, port)
 }
 
-func (r *BindRequest) accept(addr *Addr, port uint16) {
+func (r *BindRequest) accept(addr *Addr, port uint16) (ok bool) {
 	r.once.Do(func() {
 		r.bindMux.Lock()
 		defer r.bindMux.Unlock()
@@ -461,7 +465,9 @@ func (r *BindRequest) accept(addr *Addr, port uint16) {
 		r.reply.bndAddr = addr
 		r.reply.bndPort = port
 		r.wg.Done()
+		ok = true
 	})
+	return
 }
 
 // Bind binds the client. This is the second reply from the server.
@@ -469,7 +475,7 @@ func (r *BindRequest) accept(addr *Addr, port uint16) {
 // No-op if the first reply is not decided.
 // Request is denied if conn is nil.
 // Port 0 is valid and will be sent as-is.
-func (r *BindRequest) Bind(conn net.Conn) {
+func (r *BindRequest) Bind(conn net.Conn) (ok bool) {
 	r.bindMux.Lock()
 	defer r.bindMux.Unlock()
 	if r.reply == nil {
@@ -485,21 +491,23 @@ func (r *BindRequest) Bind(conn net.Conn) {
 		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort, false)
 		return
 	}
-	r.bind(conn, addr, port)
+	return r.bind(conn, addr, port)
 }
 
-func (r *BindRequest) bind(conn net.Conn, addr *Addr, port uint16) {
+func (r *BindRequest) bind(conn net.Conn, addr *Addr, port uint16) (ok bool) {
 	r.bindOnce.Do(func() {
 		r.conn = conn
 		r.bindReply = new(reply)
 		r.bindReply.bndAddr = addr
 		r.bindReply.bndPort = port
+		ok = true
 	})
+	return
 }
 
 // DenyBind denies the request.
 // No-op if the first reply is not decided.
-func (r *BindRequest) DenyBind(rep byte, addr string) {
+func (r *BindRequest) DenyBind(rep byte, addr string) (ok bool) {
 	r.bindMux.Lock()
 	defer r.bindMux.Unlock()
 	if r.reply == nil {
@@ -508,6 +516,7 @@ func (r *BindRequest) DenyBind(rep byte, addr string) {
 
 	a, port := parseHostPort(addr)
 	if a == nil {
+    // TODO finish making ok blabafdksljlblfd
 		r.deny(rep, emptyFQDN, zeroPort, false)
 	} else {
 		r.deny(rep, a, port, false)
