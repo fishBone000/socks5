@@ -30,8 +30,8 @@ func (r *sliceReader) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
-func randAddr() *Addr {
-	addr := new(Addr)
+func randAddr() *AddrPort {
+	addr := new(AddrPort)
 	n := rand.Intn(3)
 	switch n {
 	case 0:

@@ -308,10 +308,10 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	}
 
 	if req.cmd != CmdCONNECT && req.cmd != CmdBIND && req.cmd != CmdASSOC {
-		req.deny(RepCmdNotSupported, emptyFQDN, zeroPort, false)
+		req.deny(RepCmdNotSupported, emptyAddr, false)
 	} else {
 		time.AfterFunc(PeriodAutoDeny, func() {
-			req.deny(RepGeneralFailure, emptyFQDN, zeroPort, true)
+			req.deny(RepGeneralFailure, emptyAddr, true)
 		})
 
 		s.dbgv(newOpErr("evaluate request "+cmd2str(req.cmd), conn, nil))
@@ -321,7 +321,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 			req.wg.Wait()
 		} else {
 			s.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmd2str(req.cmd)}))
-			req.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
+			req.deny(RepGeneralFailure, emptyAddr, false)
 		}
 	}
 	if req.timeoutDeny {
@@ -383,7 +383,7 @@ func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
 	}
 
 	time.AfterFunc(PeriodAutoDeny, func() {
-		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort, true)
+		r.denyBind(RepGeneralFailure, emptyAddr, true)
 	})
 	r.bindWg.Wait()
 

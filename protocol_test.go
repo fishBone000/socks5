@@ -1,6 +1,7 @@
 package socksy5
 
 import (
+	"encoding/binary"
 	"io"
 	"reflect"
 	"testing"
@@ -10,22 +11,22 @@ import (
 
 func FuzzReadAddr(f *testing.F) {
 	f.Add(
-		[]byte{ATYPV4, 0, 0, 0, 0},
+		[]byte{ATYPV4, 0, 0, 0, 0, 0, 0},
 	)
 
 	f.Fuzz(func(t *testing.T, a []byte) {
 		r := newSliceReader(a)
-		addr, err := readAddr(r)
+		addr, err := readAddrPort(r)
 
-		l := len(a)
+		inputLength := len(a)
 		Convey("Read address", t, func() {
-			if l == 0 {
+			if inputLength == 0 {
 				So(addr, ShouldBeNil)
 				So(err, ShouldEqual, io.EOF)
 				return
 			}
 
-			if l >= 1 {
+			if inputLength >= 1 {
 				if a[0] != ATYPV4 && a[0] != ATYPDOMAIN && a[0] != ATYPV6 {
 					So(addr, ShouldBeNil)
 					So(err, ShouldEqual, ErrMalformed)
@@ -33,41 +34,45 @@ func FuzzReadAddr(f *testing.F) {
 				}
 			}
 
-			if l == 1 {
+			if inputLength == 1 {
 				So(addr, ShouldBeNil)
 				So(err, ShouldEqual, io.EOF)
 				return
 			}
 
+
 			if a[0] == ATYPDOMAIN {
-				if 2+int(a[1]) > l {
+        addrLength := 2+int(a[1])+2
+				if addrLength > inputLength {
 					So(addr, ShouldBeNil)
 					So(err, ShouldEqual, io.EOF)
 					return
 				} else {
 					So(err, ShouldBeNil)
 					So(addr.Type, ShouldEqual, ATYPDOMAIN)
-					So(addr.Bytes, ShouldEqual, a[2:2+int(a[1])])
-					So(r.n, ShouldEqual, 2+len(addr.Bytes))
+					So(addr.Bytes, ShouldEqual, a[2:addrLength-2])
+          So(binary.BigEndian.Uint16(a[addrLength-2:addrLength]), ShouldEqual, addr.Port)
+					So(r.n, ShouldEqual, addrLength)
 					return
 				}
 			}
 
-			var addrL int
+			var addrLength int
 			if a[0] == ATYPV4 {
-				addrL = 4
+				addrLength = 1+4+2
 			} else {
-				addrL = 16
+				addrLength = 1+16+2
 			}
-			if l < 1+addrL {
+			if inputLength < addrLength {
 				So(addr, ShouldBeNil)
 				So(err, ShouldEqual, io.EOF)
 				return
 			}
 
 			So(err, ShouldBeNil)
-			So(addr.Bytes, ShouldEqual, a[1:1+addrL])
-			So(r.n, ShouldEqual, 1+addrL)
+			So(addr.Bytes, ShouldEqual, a[1:addrLength-2])
+      So(binary.BigEndian.Uint16(a[addrLength-2:addrLength]), ShouldEqual, addr.Port)
+			So(r.n, ShouldEqual, addrLength)
 
 			return
 		})
@@ -78,7 +83,7 @@ func FuzzAddrMarshalBinary(f *testing.F) {
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, a []byte) {
 		r := newSliceReader(a)
-		addr, err := readAddr(r)
+		addr, err := readAddrPort(r)
 		if err != nil {
 			return
 		}

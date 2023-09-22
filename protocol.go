@@ -2,12 +2,13 @@ package socksy5
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"strconv"
 	"sync"
-
-	"github.com/asaskevich/govalidator"
 )
 
 const VerSOCKS5 byte = 0x05 // SOCKS5 VER byte
@@ -57,22 +58,25 @@ const (
 	RepAddrTypeNotSupported    byte = 0x08
 )
 
-// An Addr stands for addresses sent in SOCKS5 requests and replies.
-//
-// Does not include port.
-type Addr struct {
-	Type byte // ATYP byte value
+// An AddrPort stands for the address and the port
+// sent in SOCKS5 requests and replies.
+type AddrPort struct {
+	// ATYP byte value
+	Type byte
 
-	// Raw bytes, if ATYP is ATYPDOMAIN, the first byte that specifies the FQDN length
-	// is omitted.
+	// Raw bytes, port not included.
+	// If ATYP is ATYPDOMAIN,
+	// the first byte that specifies the FQDN length is omitted.
 	Bytes []byte
+	Port  uint16
+
+	// One of "tcp" and "udp", just for convenience
+	Protocol string
 }
 
-var emptyFQDN = &Addr{Type: ATYPDOMAIN, Bytes: nil}
+var emptyAddr = &AddrPort{Type: ATYPDOMAIN, Bytes: nil, Port: 0}
 
-const zeroPort uint16 = 0x0000
-
-func readAddr(reader io.Reader) (*Addr, error) {
+func readAddrPort(reader io.Reader) (*AddrPort, error) {
 	atyp, err := readByte(reader)
 	if err != nil {
 		return nil, err
@@ -92,106 +96,116 @@ func readAddr(reader io.Reader) (*Addr, error) {
 	default:
 		return nil, ErrMalformed
 	}
-	_, err = fillBuffer(content, reader)
+	if _, err := fillBuffer(content, reader); err != nil {
+		return nil, err
+	}
+	port, err := readUInt16BigEndian(reader)
 	if err != nil {
 		return nil, err
 	}
-	return &Addr{
+	return &AddrPort{
 		Type:  atyp,
 		Bytes: content,
+		Port:  port,
 	}, nil
 }
 
-func parseHost(host string) *Addr {
-	ip := net.ParseIP(host)
-	a := new(Addr)
-	if ip == nil {
+func ParseAddrPort(s string) (*AddrPort, error) {
+	a := new(AddrPort)
+	ipPort, err := netip.ParseAddrPort(s)
+
+	if err != nil {
+		host, portS, err := net.SplitHostPort(s)
+		if err != nil {
+			return nil, err
+		}
+		port, ok := parseUint16(portS)
+		if !ok {
+			return nil, errors.New(portS + " is not port")
+		}
+
 		a.Type = ATYPDOMAIN
 		a.Bytes = []byte(host)
-		return a
+		a.Port = uint16(port)
+		return a, nil
 	}
-	if govalidator.IsIPv4(host) {
+
+	ip := ipPort.Addr()
+	if ip.Is4() {
 		a.Type = ATYPV4
-		a.Bytes = ip.To4()
-		return a
+	} else {
+		a.Type = ATYPV6
 	}
-	a.Type = ATYPV6
-	a.Bytes = ip.To16()
-	return a
+	a.Bytes, _ = ip.MarshalBinary()
+	a.Port = ipPort.Port()
+	return a, nil
 }
 
-func parseHostPort(addr string) (*Addr, uint16) {
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, 0
-	}
-	port, ok := parseUint16(portStr)
-	if !ok {
-		return nil, 0
-	}
-	return parseHost(host), port
-}
-
-// Network returns "ip4" if ATYP byte value is ATYPV4, "ip6" if ATYPV6,
-// "ip" if ATYPDOMAIN,
-// "unknown" otherwise,
-// though [Server] will consider it malformed if the received ATYP is not one of
-// the three known address types.
-func (a *Addr) Network() string {
-	switch a.Type {
-	case ATYPV4:
-		return "ip4"
-	case ATYPV6:
-		return "ip6"
-	case ATYPDOMAIN:
-		return "ip"
-	}
-	return "unknown"
-}
-
-func (a *Addr) String() string {
+func (a *AddrPort) Network() string {
 	if a == nil {
 		return "<nil>"
 	}
-	if a.Type == ATYPV4 || a.Type == ATYPV6 {
-		return net.IP(a.Bytes).String()
+	switch a.Type {
+	case ATYPV4:
+		return a.Protocol + "4"
+	case ATYPV6:
+		return a.Protocol + "6"
+	case ATYPDOMAIN:
+		return a.Protocol
 	}
-	if a.Type == ATYPDOMAIN {
-		return string(a.Bytes)
-	}
-	return fmt.Sprintf("% X", a.Bytes)
+	return fmt.Sprintf("0x%02X", a.Type)
 }
 
-func (a *Addr) cpy() *Addr {
-	b := new(Addr)
+func (a *AddrPort) String() string {
+	if a == nil {
+		return "<nil>"
+	}
+	var host string
+	if a.Type == ATYPV4 || a.Type == ATYPV6 {
+		host = net.IP(a.Bytes).String()
+	} else if a.Type == ATYPDOMAIN {
+		host = string(a.Bytes)
+	} else {
+		host = fmt.Sprintf("%02X", a.Bytes)
+	}
+	return host + ":" + strconv.Itoa(int(a.Port))
+}
+
+func (a *AddrPort) cpy() *AddrPort {
+	b := new(AddrPort)
 	b.Type = a.Type
 	b.Bytes = make([]byte, len(a.Bytes))
 	copy(b.Bytes, a.Bytes)
+	b.Port = a.Port
+	b.Protocol = a.Protocol
 	return b
 }
 
-// MarshalBinary returns raw bytes used in SOCKS5 traffic. (ATYP+ADDR)
-func (a *Addr) MarshalBinary() (data []byte, err error) {
+// MarshalBinary returns raw bytes used in SOCKS5 traffic. (ATYP+ADDR+PORT)
+func (a *AddrPort) MarshalBinary() (data []byte, err error) {
+	var l int
+
 	if a.Type == ATYPDOMAIN {
-		var l int
 		if len(a.Bytes) > 0xFF {
-			l = 0xFF
-		} else {
-			l = len(a.Bytes)
+			return nil, ErrMalformed
 		}
-		data = make([]byte, 2+l)
-		data[1] = byte(l)
+		l = 1 + 1 + len(a.Bytes) + 2
+		data = make([]byte, l)
+		data[1] = byte(l-4)
 		copy(data[2:], a.Bytes)
 	} else if a.Type == ATYPV4 || a.Type == ATYPV6 {
 		if a.Type == ATYPV4 && len(a.Bytes) != 4 || a.Type == ATYPV6 && len(a.Bytes) != 16 {
 			return nil, ErrMalformed
 		}
-		data = make([]byte, 1+len(a.Bytes))
+		l = 1 + len(a.Bytes) + 2
+		data = make([]byte, l)
 		copy(data[1:], a.Bytes)
 	} else {
 		return nil, ErrMalformed
 	}
+
 	data[0] = a.Type
+	binary.BigEndian.PutUint16(data[l-2:], a.Port)
 	return
 }
 
@@ -308,7 +322,7 @@ func (r *Handshake) RemoteAddr() net.Addr {
 // after [PeriodAutoDeny].
 type Request struct {
 	cmd     byte
-	dstAddr *Addr
+	dstAddr *AddrPort
 	dstPort uint16 // Native byte order
 
 	raddr       net.Addr
@@ -342,7 +356,7 @@ func readRequest(reader io.Reader) (*Request, error) {
 		return nil, ErrMalformed
 	}
 
-	req.dstAddr, err = readAddr(reader)
+	req.dstAddr, err = readAddrPort(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +377,7 @@ func (r *Request) RemoteAddr() net.Addr {
 }
 
 // DstAddr returns the DST.ADDR field in the request message.
-func (r *Request) DstAddr() *Addr {
+func (r *Request) DstAddr() *AddrPort {
 	return r.dstAddr.cpy()
 }
 
@@ -378,22 +392,22 @@ func (r *Request) DstPort() uint16 {
 // addr is used for BND fields. If addr is invalid, BND.ADDR
 // will be set to empty domain name, and BND.PORT set to 0.
 func (r *Request) Deny(rep byte, addr string) (ok bool) {
-	a, port := parseHostPort(addr)
-	if a == nil {
-		return r.deny(rep, emptyFQDN, zeroPort, false)
+	a, err := ParseAddrPort(addr)
+
+	if err != nil {
+		return r.deny(rep, emptyAddr, false)
 	}
-	return r.deny(rep, a, port, false)
+	return r.deny(rep, a, false)
 }
 
-func (r *Request) deny(rep byte, addr *Addr, port uint16, timeoutDeny bool) (ok bool) {
+func (r *Request) deny(rep byte, addr *AddrPort, timeoutDeny bool) (ok bool) {
 	r.once.Do(func() {
 		if rep == RepSucceeded {
 			r.reply.rep = RepGeneralFailure
 		} else {
 			r.reply.rep = rep
 		}
-		r.reply.bndAddr = addr
-		r.reply.bndPort = port
+		r.reply.addr = addr
 		r.timeoutDeny = timeoutDeny
 		r.wg.Done()
 		ok = true
@@ -410,22 +424,21 @@ type ConnectRequest struct {
 // Port 0 is valid and will be sent as-is.
 func (r *ConnectRequest) Accept(conn net.Conn) (ok bool) {
 	if conn == nil || conn.LocalAddr() == nil {
-		r.deny(RepGeneralFailure, emptyFQDN.cpy(), zeroPort, false)
+		r.deny(RepGeneralFailure, emptyAddr.cpy(), false)
 		return
 	}
-	addr, port := parseHostPort(conn.LocalAddr().String())
-	if addr == nil {
-		r.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
+  addr, err := ParseAddrPort(conn.LocalAddr().String())
+	if err != nil {
+		r.deny(RepGeneralFailure, emptyAddr, false)
 		return
 	}
-	return r.accept(conn, addr, port)
+	return r.accept(conn, addr)
 }
 
-func (r *ConnectRequest) accept(conn net.Conn, addr *Addr, port uint16) (ok bool) {
+func (r *ConnectRequest) accept(conn net.Conn, addr *AddrPort) (ok bool) {
 	r.once.Do(func() {
 		r.conn = conn
-		r.reply.bndAddr = addr
-		r.reply.bndPort = port
+		r.reply.addr = addr
 		r.wg.Done()
 		ok = true
 	})
@@ -449,21 +462,20 @@ type BindRequest struct {
 // listener yourself or use Binder.
 // Port 0 is valid and will be sent as-is.
 func (r *BindRequest) Accept(addr string) (ok bool) {
-	a, port := parseHostPort(addr)
-	if a == nil {
-		r.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
+	a, err := ParseAddrPort(addr)
+	if err != nil {
+		r.deny(RepGeneralFailure, emptyAddr, false)
 		return
 	}
-	return r.accept(a, port)
+	return r.accept(a)
 }
 
-func (r *BindRequest) accept(addr *Addr, port uint16) (ok bool) {
+func (r *BindRequest) accept(addr *AddrPort) (ok bool) {
 	r.once.Do(func() {
 		r.bindMux.Lock()
 		defer r.bindMux.Unlock()
 		r.reply = new(reply)
-		r.reply.bndAddr = addr
-		r.reply.bndPort = port
+		r.reply.addr = addr
 		r.wg.Done()
 		ok = true
 	})
@@ -483,23 +495,22 @@ func (r *BindRequest) Bind(conn net.Conn) (ok bool) {
 	}
 
 	if conn == nil || conn.LocalAddr() == nil {
-		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort, false)
+		r.denyBind(RepGeneralFailure, emptyAddr, false)
 		return
 	}
-	addr, port := parseHostPort(conn.LocalAddr().String())
-	if addr == nil {
-		r.denyBind(RepGeneralFailure, emptyFQDN, zeroPort, false)
+	addr, err := ParseAddrPort(conn.LocalAddr().String())
+	if err != nil {
+		r.denyBind(RepGeneralFailure, emptyAddr, false)
 		return
 	}
-	return r.bind(conn, addr, port)
+	return r.bind(conn, addr)
 }
 
-func (r *BindRequest) bind(conn net.Conn, addr *Addr, port uint16) (ok bool) {
+func (r *BindRequest) bind(conn net.Conn, addr *AddrPort) (ok bool) {
 	r.bindOnce.Do(func() {
 		r.conn = conn
 		r.bindReply = new(reply)
-		r.bindReply.bndAddr = addr
-		r.bindReply.bndPort = port
+		r.bindReply.addr = addr
 		ok = true
 	})
 	return
@@ -514,16 +525,16 @@ func (r *BindRequest) DenyBind(rep byte, addr string) (ok bool) {
 		return
 	}
 
-	a, port := parseHostPort(addr)
-	if a == nil {
-    // TODO finish making ok blabafdksljlblfd
-		r.deny(rep, emptyFQDN, zeroPort, false)
+	a, err := ParseAddrPort(addr)
+	if err != nil {
+		r.deny(rep, emptyAddr, false)
 	} else {
-		r.deny(rep, a, port, false)
+		ok = r.deny(rep, a, false)
 	}
+  return
 }
 
-func (r *BindRequest) denyBind(rep byte, addr *Addr, port uint16, timeoutDeny bool) {
+func (r *BindRequest) denyBind(rep byte, addr *AddrPort, timeoutDeny bool) (ok bool) {
 	r.bindOnce.Do(func() {
 		if rep == RepSucceeded {
 			r.bindReply.rep = RepGeneralFailure
@@ -531,11 +542,12 @@ func (r *BindRequest) denyBind(rep byte, addr *Addr, port uint16, timeoutDeny bo
 			r.bindReply.rep = rep
 		}
 		r.bindReply = new(reply)
-		r.bindReply.bndAddr = addr
-		r.bindReply.bndPort = port
+		r.bindReply.addr = addr
 		r.bindTimeoutDeny = timeoutDeny
 		r.bindWg.Done()
+    ok = true
 	})
+  return
 }
 
 type AssocRequest struct {
@@ -558,15 +570,15 @@ type AssocRequest struct {
 //
 // Port 0 is valid and will be sent as-is.
 func (r *AssocRequest) Accept(addr string, notify func(reason error)) (terminator func() error) {
-	a, port := parseHostPort(addr)
-	if a == nil {
-		r.deny(RepGeneralFailure, emptyFQDN, zeroPort, false)
+	a, err := ParseAddrPort(addr)
+	if err != nil {
+		r.deny(RepGeneralFailure, emptyAddr, false)
 		return nil
 	}
-	return r.accept(a, port, notify)
+	return r.accept(a, notify)
 }
 
-func (r *AssocRequest) accept(addr *Addr, port uint16, notify func(error)) (terminator func() error) {
+func (r *AssocRequest) accept(addr *AddrPort, notify func(error)) (terminator func() error) {
 	var t func() error
 	r.once.Do(func() {
 		r.notify = notify
@@ -579,19 +591,17 @@ func (r *AssocRequest) accept(addr *Addr, port uint16, notify func(error)) (term
 }
 
 type reply struct {
-	rep     byte
-	bndAddr *Addr
-	bndPort uint16
+	rep  byte
+	addr *AddrPort
 }
 
 func (r *reply) MarshalBinary() (data []byte, err error) {
-	aBytes, _ := r.bndAddr.MarshalBinary()
-	l := 1 + 1 + 1 + len(aBytes) + 2
+	aBytes, _ := r.addr.MarshalBinary()
+	l := 1 + 1 + 1 + len(aBytes)
 	data = make([]byte, l)
 	data[0] = VerSOCKS5
 	data[1] = r.rep
 	data[2] = RSV
-	copy(data[2:], aBytes)
-	binary.BigEndian.PutUint16(data[l-2:], r.bndPort)
+	copy(data[3:], aBytes)
 	return data, nil
 }

@@ -254,11 +254,11 @@ type tester struct {
 	neg       Subnegotiator
 	rep1      byte // First reply code
 	rep2      byte // Second reply code, used in BND only
-	addrReq   *Addr
+	addrReq   *AddrPort
 	portReq   uint16
-	addrRep1  *Addr
+	addrRep1  *AddrPort
 	portRep1  uint16
-	addrRep2  *Addr
+	addrRep2  *AddrPort
 	portRep2  uint16
 	malf      malform
 	rawHs     []byte

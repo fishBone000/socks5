@@ -11,18 +11,18 @@ import (
 type Connector struct {
 }
 
-func (c *Connector) Dial(addr *Addr, port uint16) (net.Conn, error) {
+func (c *Connector) Dial(addr *AddrPort, port uint16) (net.Conn, error) {
 	return net.Dial(mapIp2Tcp(addr.Network()), addr.String()+":"+strconv.Itoa(int(port)))
 }
 
 // A Binder fulfills a SOCKS5 client's BIND request.
 type Binder struct {
-	HintAddr *Addr
+	HintAddr *AddrPort
 	HintPort uint16
 
 	conn net.Conn
 	l    net.Listener
-	addr Addr
+	addr AddrPort
 	port uint16
 }
 
@@ -35,7 +35,7 @@ type Binder struct {
 // - try to resolve addr, then fallback to one of the address above accordingly,
 // if ATYP is ATYPDOMAIN
 // - return [net.UnknownNetworkError], if otherwise.
-func (b *Binder) Start(addr Addr, port uint16) (net.Addr, error) {
+func (b *Binder) Start(addr AddrPort, port uint16) (net.Addr, error) {
 	var l net.Listener
 	var err error
 
