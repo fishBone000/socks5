@@ -40,17 +40,17 @@ func (e *LogEntry) Unwrap() error {
 // String returns a string representation of LogEntry, in the format of
 // [SEVERITY] HH:MM:SS ERROR
 //
-// If e.Severity is SeverityDebug, SEVERITY is followed by a space and e.Verbosity. 
+// If e.Severity is SeverityDebug, SEVERITY is followed by a space and e.Verbosity.
 func (e *LogEntry) String() string {
 	s := "["
 	s += e.Severity
 	if e.Severity == SeverityDebug {
 		s += fmt.Sprintf(" %d", e.Verbosity)
 	}
-  s += "] "
-  s += e.Time.Format(time.TimeOnly)
-  s += " " + e.Err.Error()
-  return s
+	s += "] "
+	s += e.Time.Format(time.TimeOnly)
+	s += " " + e.Err.Error()
+	return s
 }
 
 func (s *Server) sendLog(l LogEntry) {

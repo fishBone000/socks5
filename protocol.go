@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"sync"
 )
@@ -171,6 +172,16 @@ func (a *AddrPort) String() string {
 	return host + ":" + strconv.Itoa(int(a.Port))
 }
 
+// Equal tests whether a and x are the same address.
+// Both a.Protocol and x.Protocol are not compared.
+func (a *AddrPort) Equal(x *AddrPort) bool {
+	if a == x {
+		return true
+	}
+
+	return a.Type == x.Type && reflect.DeepEqual(a.Bytes, x.Bytes)
+}
+
 func (a *AddrPort) cpy() *AddrPort {
 	b := new(AddrPort)
 	b.Type = a.Type
@@ -191,7 +202,7 @@ func (a *AddrPort) MarshalBinary() (data []byte, err error) {
 		}
 		l = 1 + 1 + len(a.Bytes) + 2
 		data = make([]byte, l)
-		data[1] = byte(l-4)
+		data[1] = byte(l - 4)
 		copy(data[2:], a.Bytes)
 	} else if a.Type == ATYPV4 || a.Type == ATYPV6 {
 		if a.Type == ATYPV4 && len(a.Bytes) != 4 || a.Type == ATYPV6 && len(a.Bytes) != 16 {
@@ -321,9 +332,8 @@ func (r *Handshake) RemoteAddr() net.Addr {
 // A Request will be denied automatically if it's not accepted or denied
 // after [PeriodAutoDeny].
 type Request struct {
-	cmd     byte
-	dstAddr *AddrPort
-	dstPort uint16 // Native byte order
+	cmd byte
+	dst *AddrPort
 
 	raddr       net.Addr
 	laddr       net.Addr
@@ -356,7 +366,7 @@ func readRequest(reader io.Reader) (*Request, error) {
 		return nil, ErrMalformed
 	}
 
-	req.dstAddr, err = readAddrPort(reader)
+	req.dst, err = readAddrPort(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -376,14 +386,9 @@ func (r *Request) RemoteAddr() net.Addr {
 	return r.raddr
 }
 
-// DstAddr returns the DST.ADDR field in the request message.
-func (r *Request) DstAddr() *AddrPort {
-	return r.dstAddr.cpy()
-}
-
-// DstAddr returns the DST.PORT field in the request message.
-func (r *Request) DstPort() uint16 {
-	return r.dstPort
+// Dst returns the DST fields in the request message.
+func (r *Request) Dst() *AddrPort {
+	return r.dst.cpy()
 }
 
 // Deny denies the request with REP byte code.
@@ -427,7 +432,7 @@ func (r *ConnectRequest) Accept(conn net.Conn) (ok bool) {
 		r.deny(RepGeneralFailure, emptyAddr.cpy(), false)
 		return
 	}
-  addr, err := ParseAddrPort(conn.LocalAddr().String())
+	addr, err := ParseAddrPort(conn.LocalAddr().String())
 	if err != nil {
 		r.deny(RepGeneralFailure, emptyAddr, false)
 		return
@@ -531,7 +536,7 @@ func (r *BindRequest) DenyBind(rep byte, addr string) (ok bool) {
 	} else {
 		ok = r.deny(rep, a, false)
 	}
-  return
+	return
 }
 
 func (r *BindRequest) denyBind(rep byte, addr *AddrPort, timeoutDeny bool) (ok bool) {
@@ -545,9 +550,9 @@ func (r *BindRequest) denyBind(rep byte, addr *AddrPort, timeoutDeny bool) (ok b
 		r.bindReply.addr = addr
 		r.bindTimeoutDeny = timeoutDeny
 		r.bindWg.Done()
-    ok = true
+		ok = true
 	})
-  return
+	return
 }
 
 type AssocRequest struct {

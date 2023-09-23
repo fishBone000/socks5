@@ -62,7 +62,9 @@ func (s *Server) Start(addr string) (err error) {
 	}
 	s.started = true // mux is not needed here
 
+  s.closers = map[closer]struct{}{}
 	s.regCloser(s.listener)
+
 	s.info(nil, "server started, listening for", s.listener.Addr())
 
 	go s.listen()
@@ -76,10 +78,10 @@ func (s *Server) Running() bool {
 }
 
 func (s *Server) Addr() net.Addr {
-  if s.listener == nil {
-    return nil
-  }
-  return s.listener.Addr()
+	if s.listener == nil {
+		return nil
+	}
+	return s.listener.Addr()
 }
 
 // Close closes the internal listener. Connections established are not closed.
@@ -212,7 +214,10 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	time.AfterFunc(PeriodAutoDeny, func() {
 		hs.deny(true)
 	})
-	s.dbgv(newOpErr("select method from one of ", conn, nil))
+	s.dbgv(newOpErr(
+    fmt.Sprintf("select method from one of % 02X", hs.methods), 
+    conn, nil,
+  ))
 	sent := s.selectMethod(&hs)
 
 	if !sent || hs.timeoutDeny {

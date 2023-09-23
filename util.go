@@ -83,7 +83,7 @@ func closer2str(c closer) string {
 }
 
 func parseUint16(str string) (i uint16, ok bool) {
-	if d, err := strconv.Atoi(str); err == nil && d >= 0 && d < 0x100 {
+	if d, err := strconv.Atoi(str); err == nil && d >= 0 && d < 0x10000 {
 		return uint16(d), true
 	}
 	return 0, false
@@ -186,11 +186,11 @@ func mapIp2Tcp(ip string) string {
 	return ip
 }
 
-func isIntOneOf(a int, ints... int) bool {
-  for _, v := range ints {
-    if a == v {
-      return true
-    }
-  }
-  return false
+func isIntOneOf(a int, ints ...int) bool {
+	for _, v := range ints {
+		if a == v {
+			return true
+		}
+	}
+	return false
 }

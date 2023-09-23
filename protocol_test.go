@@ -40,9 +40,8 @@ func FuzzReadAddr(f *testing.F) {
 				return
 			}
 
-
 			if a[0] == ATYPDOMAIN {
-        addrLength := 2+int(a[1])+2
+				addrLength := 2 + int(a[1]) + 2
 				if addrLength > inputLength {
 					So(addr, ShouldBeNil)
 					So(err, ShouldEqual, io.EOF)
@@ -51,7 +50,7 @@ func FuzzReadAddr(f *testing.F) {
 					So(err, ShouldBeNil)
 					So(addr.Type, ShouldEqual, ATYPDOMAIN)
 					So(addr.Bytes, ShouldEqual, a[2:addrLength-2])
-          So(binary.BigEndian.Uint16(a[addrLength-2:addrLength]), ShouldEqual, addr.Port)
+					So(binary.BigEndian.Uint16(a[addrLength-2:addrLength]), ShouldEqual, addr.Port)
 					So(r.n, ShouldEqual, addrLength)
 					return
 				}
@@ -59,9 +58,9 @@ func FuzzReadAddr(f *testing.F) {
 
 			var addrLength int
 			if a[0] == ATYPV4 {
-				addrLength = 1+4+2
+				addrLength = 1 + 4 + 2
 			} else {
-				addrLength = 1+16+2
+				addrLength = 1 + 16 + 2
 			}
 			if inputLength < addrLength {
 				So(addr, ShouldBeNil)
@@ -71,7 +70,7 @@ func FuzzReadAddr(f *testing.F) {
 
 			So(err, ShouldBeNil)
 			So(addr.Bytes, ShouldEqual, a[1:addrLength-2])
-      So(binary.BigEndian.Uint16(a[addrLength-2:addrLength]), ShouldEqual, addr.Port)
+			So(binary.BigEndian.Uint16(a[addrLength-2:addrLength]), ShouldEqual, addr.Port)
 			So(r.n, ShouldEqual, addrLength)
 
 			return
@@ -99,6 +98,8 @@ func FuzzAddrMarshalBinary(f *testing.F) {
 		}
 	})
 }
+
+// TODO Add FuzzParseAddrPort
 
 func FuzzReadHandshake(f *testing.F) {
 	f.Add([]byte{})

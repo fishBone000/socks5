@@ -2,7 +2,6 @@ package socksy5
 
 import (
 	crand "crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +19,24 @@ import (
 // TODO test chan discarding
 // TODO test parsing from string to Addr
 // TODO test usr/pwd subnegotiation
+
+func TestSimulation(t *testing.T) {
+  mngr := testMngr{
+    s: &Server{},
+    t: t,
+  }
+  
+  if err := mngr.s.Start("localhost:4000"); err != nil {
+    panic(err)
+  }
+
+  mngr.run(1 * time.Minute)
+
+  t.Logf("finished, %d testers run", mngr.nTests)
+}
+
+// ||||| Utils used in simulation test |||||
+// VVVVV                               VVVVV
 
 type malform struct {
 	hsVer  bool
@@ -64,9 +81,11 @@ func (m *malform) shouldFailRequest() bool {
 }
 
 type testMngr struct {
+	// Fill these fields in before running
+	s *Server
+	t *testing.T
+
 	mux     sync.Mutex
-	s       *Server
-	t       *testing.T
 	stop    chan struct{}
 	testers map[uint16]*tester
 	nTests  int
@@ -85,8 +104,9 @@ func (m *testMngr) delTester(t *tester) {
 	delete(m.testers, t.port)
 }
 
-func (m *testMngr) run(d time.Duration, addr string) {
+func (m *testMngr) run(d time.Duration) {
 	m.stop = make(chan struct{})
+	m.testers = map[uint16]*tester{}
 	var stopT time.Time
 	time.AfterFunc(d, func() {
 		stopT = time.Now()
@@ -112,7 +132,7 @@ func (m *testMngr) run(d time.Duration, addr string) {
 
 			if time.Now().Sub(prevTestTime) > testPeriod {
 				prevTestTime = time.Now()
-				tester := tester{}
+				tester := newTester()
 				go tester.start(m)
 			}
 
@@ -150,8 +170,8 @@ func (m *testMngr) getTester(addr string) *tester {
 		m.t.Fail()
 		return nil
 	}
-	if port < 1 || port > 0xFF {
-		m.t.Logf("port of the tester at %s is invalid", addr) // Will this really happen?
+	if port < 1 || port > 0xFFFF {
+		m.t.Logf("port of the tester at %s is invalid", addr)
 		m.t.Fail()
 		return nil
 	}
@@ -255,11 +275,9 @@ type tester struct {
 	rep1      byte // First reply code
 	rep2      byte // Second reply code, used in BND only
 	addrReq   *AddrPort
-	portReq   uint16
 	addrRep1  *AddrPort
-	portRep1  uint16
 	addrRep2  *AddrPort
-	portRep2  uint16
+	tmntType  bool // True if we shall invoke terminator, false if close conn
 	malf      malform
 	rawHs     []byte
 	rawReq    []byte
@@ -300,36 +318,40 @@ func newTester() *tester {
 
 	t.neg = NoAuthSubneg{}
 
-  if rand.Intn(100) < 75 {
-    t.rep1 = RepSucceeded
-  } else {
-    t.rep1 = byte(rand.Intn(256))
-  }
-  if rand.Intn(100) < 50 {
-    t.rep2 = RepSucceeded
-  } else {
-    t.rep2 = byte(rand.Intn(256))
-  }
+	if rand.Intn(100) < 75 {
+		t.rep1 = RepSucceeded
+	} else {
+		t.rep1 = byte(rand.Intn(256))
+	}
+	if rand.Intn(100) < 50 {
+		t.rep2 = RepSucceeded
+	} else {
+		t.rep2 = byte(rand.Intn(256))
+	}
 
 	t.addrReq = randAddr()
-	t.portReq = uint16(rand.Intn(0x100))
 	t.addrRep1 = randAddr()
-	t.portRep1 = uint16(rand.Intn(0x100))
 	t.addrRep2 = randAddr()
-	t.portRep2 = uint16(rand.Intn(0x100))
+
+	t.tmntType = randBool()
 
 	t.malf = newMalform()
 
 	t.rawHs = make([]byte, 1+1+len(t.methods))
+  t.rawHs[0] = VerSOCKS5
+  t.rawHs[1] = byte(len(t.methods))
 	copy(t.rawHs[2:], t.methods)
 
-	l := 4 + len(t.addrReq.Bytes) + 2
+	aBytes, err := t.addrReq.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+	l := 3 + len(aBytes)
 	t.rawReq = make([]byte, l)
 	t.rawReq[0] = VerSOCKS5
 	t.rawReq[1] = t.cmd
-	t.rawReq[3] = t.addrReq.Type
-	copy(t.rawReq[4:], t.addrReq.Bytes)
-	binary.BigEndian.PutUint16(t.rawReq[l-2:], t.portReq)
+	t.rawReq[2] = RSV
+	copy(t.rawReq[3:], aBytes)
 
 	t.applyMalform()
 
@@ -368,9 +390,10 @@ func (t *tester) String() string {
 	s += fmt.Sprintf("CHOSEN %02X\n", t.mthChosen)
 	s += fmt.Sprintf("NEG %T\n", t.neg)
 	s += fmt.Sprintf("CMD %s REP1 %02X REP2 %02X\n", cmd2str(t.cmd), t.rep1, t.rep2)
-  s += fmt.Sprintf("ADDR REQ %s:%d\n", t.addrReq, t.portReq)
-  s += fmt.Sprintf("ADDR ACT1 %s:%d\n", t.addrRep1, t.portRep1)
-  s += fmt.Sprintf("ADDR ACT2 %s:%d\n", t.addrRep2, t.portRep2)
+	s += fmt.Sprintf("ADDR REQ %s\n", t.addrReq)
+	s += fmt.Sprintf("ADDR REP1 %s\n", t.addrRep1)
+	s += fmt.Sprintf("ADDR REP2 %s\n", t.addrRep2)
+	s += fmt.Sprintf("TERMINATION TYPE %t\n", t.tmntType)
 	s += fmt.Sprintf("MALF %s\n", (&t.malf).String())
 	s += fmt.Sprintf("RAW HS % 02X\n", t.rawHs)
 	s += fmt.Sprintf("RAW REQ % 02X\n", t.rawReq)
@@ -396,9 +419,19 @@ func (t *tester) start(mngr *testMngr) {
 	t.mngr = mngr
 	t.test = mngr.t
 
-	if t.dialServer() {
+	if !t.dialServer() {
 		return
 	}
+
+  _, portS, err := net.SplitHostPort(t.conn.LocalAddr().String())
+  if err != nil {
+    panic(err)
+  }
+  var ok bool
+  t.port, ok = parseUint16(portS)
+  if !ok {
+    panic("couldn't parse port from "+t.conn.LocalAddr().String())
+  }
 
 	mngr.regTester(t)
 	defer func() {
@@ -439,19 +472,19 @@ func (t *tester) start(mngr *testMngr) {
 
 	t.setStage("subnegotiation")
 
-  // TODO Add more subneg tests
-  // TODO Add capsulation tests
+	// TODO Add more subneg tests
+	// TODO Add capsulation tests
 
 	t.setStage("request")
 
-  if !t.writeReq() {
-    return
-  }
+	if !t.writeReq() {
+		return
+	}
 
-  if t.malf.shouldFailRequest() {
-    t.chkMalformErr()
-    return
-  }
+	if t.malf.shouldFailRequest() {
+		t.chkMalformErr()
+		return
+	}
 
 	t.reqChan = make(chan any)
 	req := t.rcvReq()
@@ -460,19 +493,19 @@ func (t *tester) start(mngr *testMngr) {
 		return
 	}
 
-  switch req := req.(type) {
-  case *ConnectRequest:
-    t.testConnect(req)
-  case *BindRequest:
-    t.testBind(req)
-  case *AssocRequest:
-    t.testAssoc(req)
-  default:
-    t.test.Logf("received request of unknown type T from server, how??\nreq: %#v\n tester detail: \n%s\n", req, t.String())
-    t.test.Fail()
-  }
+	switch req := req.(type) {
+	case *ConnectRequest:
+		t.testConnect(req)
+	case *BindRequest:
+		t.testBind(req)
+	case *AssocRequest:
+		t.testAssoc(req)
+	default:
+		t.test.Logf("received request of unknown type T from server, how??\nreq: %#v\n tester detail: \n%s\n", req, t.String())
+		t.test.Fail()
+	}
 
-  return
+	return
 }
 
 func (t *tester) dialServer() (ok bool) {
@@ -544,15 +577,15 @@ func (t *tester) chkHsReply() (ok bool) {
 }
 
 func (t *tester) writeReq() (ok bool) {
-  if _, err := t.conn.Write(t.rawReq); err != nil {
-    if !t.malf.shouldFailRequest() {
+	if _, err := t.conn.Write(t.rawReq); err != nil {
+		if !t.malf.shouldFailRequest() {
 			t.test.Logf("tester failed to write request: %s", err)
 			t.test.Fail()
 			return false
-    }
-    t.test.Logf("error writing malformed request to server: %s", err)
-  }
-  return true
+		}
+		t.test.Logf("error writing malformed request to server: %s", err)
+	}
+	return true
 }
 
 func (t *tester) rcvErr() *OpError {
@@ -602,15 +635,186 @@ func (t *tester) rcvReq() any {
 }
 
 func (t *tester) testConnect(req *ConnectRequest) {
-  if t.rep1 == RepSucceeded {
-    // a, b := newPipeConn()
-  }
+	if t.rep1 == RepSucceeded {
+		local, remote := newPipeConn(nil, t.addrRep1)
+
+		if ok := req.Accept(local); !ok {
+			t.test.Logf("failed to accept CONNECT request, tester detail: \n%s\n", t.String())
+			t.test.Fail()
+			return
+		}
+
+		if ok := t.chkReply(t.rep1, t.addrRep1); !ok {
+			return
+		}
+
+		err := chkIntegrity(t.conn, remote)
+		if err != nil {
+			t.test.Logf("check CONNECT data integrity failed: %s. tester detail: \n%s\n", err, t.String())
+			t.test.Fail()
+		}
+		return
+	}
+
+	req.Deny(t.rep1, t.addrRep1.String())
+
+	t.chkReply(t.rep1, t.addrRep1)
+	t.conn.Close()
 }
 
 func (t *tester) testBind(req *BindRequest) {
+	if t.rep1 == RepSucceeded {
+		req.Accept(t.addrRep1.String())
+	} else {
+		req.Deny(t.rep1, t.addrRep1.String())
+	}
 
+	if ok := t.chkReply(t.rep1, t.addrRep1); !ok || t.rep1 != RepSucceeded {
+		return
+	}
+
+	var local, remote *pipeConn
+	if t.rep2 == RepSucceeded {
+		local, remote = newPipeConn(nil, t.addrRep2)
+
+		if ok := req.Bind(local); !ok {
+			t.test.Logf("couldn't bind. tester detail: \n%s\n", t.String())
+			t.test.Fail()
+			return
+		}
+
+		if ok := t.chkReply(t.rep2, t.addrRep2); !ok {
+			return
+		}
+
+		if err := chkIntegrity(t.conn, remote); err != nil {
+			t.test.Logf(
+				"check integrity failed: %s. tester detail: \n%s\n",
+				err, t.String(),
+			)
+			t.test.Fail()
+		}
+		return
+	}
+
+	if ok := req.DenyBind(t.rep2, t.addrRep2.String()); !ok {
+		t.test.Logf("couldn't bind. tester detail: \n%s\n", t.String())
+		t.test.Fail()
+		return
+	}
+
+	t.chkReply(t.rep2, t.addrRep2)
+
+	return
 }
 
 func (t *tester) testAssoc(req *AssocRequest) {
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	mux := sync.Mutex{}
+	timedOut := false
+	finished := false
 
+	notify := func(reason error) {
+		mux.Lock()
+		defer mux.Unlock()
+		if finished {
+			return
+		}
+		finished = true
+		timedOut = false
+
+		wg.Done()
+	}
+
+	var terminate func() error
+	if t.rep1 == RepSucceeded {
+		terminate = req.Accept(t.addrRep1.String(), notify)
+		if terminate == nil {
+			t.test.Logf("failed to accept ASSOC. tester detail: \n%s\n", t.String())
+			t.test.Fail()
+			return
+		}
+	} else {
+		if ok := req.Deny(t.rep1, t.addrRep1.String()); !ok {
+			t.test.Logf("failed to deny ASSOC. tester detail: \n%s\n", t.String())
+			t.test.Fail()
+			return
+		}
+	}
+
+	if ok := t.chkReply(t.rep1, t.addrRep1); !ok || t.rep1 != RepSucceeded {
+		return
+	}
+
+	onTimeout := func() {
+		mux.Lock()
+		defer mux.Unlock()
+		if finished {
+			return
+		}
+		finished = true
+		timedOut = true
+		wg.Done()
+	}
+
+	if t.tmntType {
+		if err := terminate(); err != nil {
+			panic(err)
+		}
+
+		time.AfterFunc(50*time.Millisecond, onTimeout)
+
+		wg.Wait()
+
+		mux.Lock()
+		defer mux.Unlock()
+		if timedOut {
+			t.test.Logf("server took too long to notify about the assoc termination. tester detail: \n%s\n", t.String())
+			t.test.Fail()
+		}
+		return
+	} else {
+		if err := t.conn.Close(); err != nil {
+			panic(err)
+		}
+
+		time.AfterFunc(50*time.Millisecond, onTimeout)
+
+		wg.Wait()
+
+		mux.Lock()
+		defer mux.Unlock()
+		if timedOut {
+			t.test.Logf("server took too long to notify about the broken assoc. tester detail: \n%s\n", t.String())
+			t.test.Fail()
+		}
+		return
+	}
+}
+
+func (t *tester) chkReply(rep byte, addr *AddrPort) (ok bool) {
+	reply, err := readReply(t.conn)
+	if err != nil {
+		t.test.Logf("failed to read reply from server: %s. tester detail: \n%s\n", err, t.String())
+		t.test.Fail()
+		return
+	}
+	if reply.rep != rep {
+		t.test.Logf(
+			"server replied with REP %02X, expected %02X. tester detail: \n%s\n",
+			reply.rep, rep, t.String(),
+		)
+		t.test.Fail()
+		return
+	}
+	if !reply.addr.Equal(addr) {
+		t.test.Logf(
+			"server replied with addr %s, expected %s. tester detail: \n%s\n",
+			reply.addr, addr, t.String(),
+		)
+		t.test.Fail()
+		return
+	}
+	return true
 }

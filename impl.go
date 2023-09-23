@@ -18,7 +18,6 @@ func (c *Connector) Dial(addr *AddrPort, port uint16) (net.Conn, error) {
 // A Binder fulfills a SOCKS5 client's BIND request.
 type Binder struct {
 	HintAddr *AddrPort
-	HintPort uint16
 
 	conn net.Conn
 	l    net.Listener
@@ -42,7 +41,7 @@ func (b *Binder) Start(addr AddrPort, port uint16) (net.Addr, error) {
 	if b.HintAddr != nil {
 		l, err = net.Listen(
 			mapIp2Tcp(b.HintAddr.Network()),
-			b.HintAddr.String()+":"+strconv.Itoa(int(b.HintPort)),
+			b.HintAddr.String(),
 		)
 	}
 
