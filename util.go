@@ -194,3 +194,12 @@ func isIntOneOf(a int, ints ...int) bool {
 	}
 	return false
 }
+
+func isByteOneOf(a byte, bytes ...byte) bool {
+	for _, v := range bytes {
+		if a == v {
+			return true
+		}
+	}
+	return false
+}

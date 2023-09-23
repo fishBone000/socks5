@@ -21,16 +21,9 @@ import (
 // TODO test usr/pwd subnegotiation
 
 func TestSimulation(t *testing.T) {
-	mngr := testMngr{
-		s: &Server{},
-		t: t,
-	}
+	mngr := testMngr{}
 
-	if err := mngr.s.Start("localhost:4000"); err != nil {
-		panic(err)
-	}
-
-	mngr.run(1 * time.Minute)
+	mngr.run(30*time.Minute, 50*time.Millisecond, t)
 
 	t.Logf("finished, %d testers run", mngr.nTests)
 }
@@ -104,21 +97,30 @@ func (m *testMngr) delTester(t *tester) {
 	delete(m.testers, t.port)
 }
 
-func (m *testMngr) run(d time.Duration) {
+func (m *testMngr) run(testTime, interval time.Duration, t *testing.T) {
+	m.t = t
+
+	m.s = &Server{}
+	go m.dispatch()
+	if err := m.s.Start("localhost:4000"); err != nil {
+		panic(err)
+	}
+
 	m.stop = make(chan struct{})
 	m.testers = map[uint16]*tester{}
 	var stopT time.Time
-	time.AfterFunc(d, func() {
+	time.AfterFunc(testTime, func() {
 		stopT = time.Now()
 		close(m.stop)
 	})
 
 	prevTestTime := time.Time{}
-	testPeriod := time.Millisecond * 100
 
-	logChan := m.s.LogChan()
-	reqChan := m.s.RequestChan()
-	hsChan := m.s.HandshakeChan()
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Printf("recovered panic: %s", err)
+		}
+	}()
 
 	for {
 		select {
@@ -127,28 +129,36 @@ func (m *testMngr) run(d time.Duration) {
 			return
 		default:
 			if m.t.Failed() {
+				// Wait outputting all remaining logs
+				time.Sleep(100 * time.Millisecond)
 				return
 			}
 
-			if time.Now().Sub(prevTestTime) > testPeriod {
+			if time.Now().Sub(prevTestTime) > interval {
 				prevTestTime = time.Now()
 				tester := newTester()
 				go tester.start(m)
 			}
+		}
+	}
+}
 
-		Loop:
-			for {
-				select {
-				case log := <-logChan:
-					m.t.Log(log.String())
-				case req := <-reqChan:
-					m.dispatchReq(req)
-				case hs := <-hsChan:
-					m.dispatchHandshake(hs)
-				default:
-					break Loop
-				}
-			}
+func (m *testMngr) dispatch() {
+	logChan := m.s.LogChan()
+	reqChan := m.s.RequestChan()
+	hsChan := m.s.HandshakeChan()
+
+Loop:
+	for {
+		select {
+		case log := <-logChan:
+			m.dispatchLog(&log)
+		case req := <-reqChan:
+			go m.dispatchReq(req)
+		case hs := <-hsChan:
+			go m.dispatchHandshake(hs)
+		case <-m.stop:
+			break Loop
 		}
 	}
 }
@@ -177,10 +187,6 @@ func (m *testMngr) getTester(addr string) *tester {
 	}
 
 	t := m.testers[uint16(port)]
-	if t == nil {
-		m.t.Logf("unable to find tester at %s in registory", addr)
-		m.t.Fail()
-	}
 	return t
 }
 
@@ -188,8 +194,6 @@ func (m *testMngr) dispatchHandshake(hs *Handshake) {
 	var tester *tester
 	tester = m.getTester(hs.RemoteAddr().String())
 	if tester == nil {
-		m.t.Logf("get tester at %s failed", hs.RemoteAddr())
-		m.t.Fail()
 		return
 	}
 
@@ -213,12 +217,22 @@ func (m *testMngr) dispatchLog(log *LogEntry) {
 	var tester *tester
 	tester = m.getTester(addr.String())
 	if tester == nil {
-		m.t.Logf("get tester at %s failed", addr.String())
-		m.t.Fail()
+		m.t.Logf("couldn't dispatch the following log entry vvv")
+		m.t.Log(log.String())
 		return
 	}
 
-	tester.errChan <- opErr
+	tester.mux.Lock()
+	defer tester.mux.Unlock()
+
+	select {
+	case tester.errChan <- opErr:
+	default:
+		m.t.Logf("dispatch err to tester %s failed", tester.conn.LocalAddr())
+		m.t.Logf("err to be dispatched: %s", opErr)
+		m.t.Logf("tester detail: \n%s\n", tester.String())
+		m.t.Fail()
+	}
 }
 
 func (m *testMngr) dispatchReq(req any) {
@@ -240,8 +254,6 @@ func (m *testMngr) dispatchReq(req any) {
 	var tester *tester
 	tester = m.getTester(addr.String())
 	if tester == nil {
-		m.t.Logf("get tester at %s failed", addr.String())
-		m.t.Fail()
 		return
 	}
 
@@ -268,19 +280,20 @@ func (m *testMngr) waitFinish(stopT time.Time) {
 }
 
 type tester struct {
-	cmd       byte
-	methods   []byte
-	mthChosen byte
-	neg       Subnegotiator
-	rep1      byte // First reply code
-	rep2      byte // Second reply code, used in BND only
-	addrReq   *AddrPort
-	addrRep1  *AddrPort
-	addrRep2  *AddrPort
-	tmntType  bool // True if we shall invoke terminator, false if close conn
-	malf      malform
-	rawHs     []byte
-	rawReq    []byte
+	cmd         byte
+	methods     []byte
+	mthChosen   byte
+	shallDenyHs bool
+	neg         Subnegotiator
+	rep1        byte // First reply code
+	rep2        byte // Second reply code, used in BND only
+	addrReq     *AddrPort
+	addrRep1    *AddrPort
+	addrRep2    *AddrPort
+	tmntType    bool // True if we shall invoke terminator, false if close conn
+	malf        malform
+	rawHs       []byte
+	rawReq      []byte
 
 	conn    net.Conn
 	test    *testing.T
@@ -314,7 +327,15 @@ func newTester() *tester {
 		panic(err)
 	}
 
-	t.mthChosen = byte(rand.Intn(256))
+	if rand.Intn(100) < 10 {
+		t.mthChosen = MethodNoAccepted
+	} else {
+		t.mthChosen = byte(rand.Intn(256))
+	}
+
+	if t.mthChosen == MethodNoAccepted || !isByteOneOf(t.mthChosen, t.methods...) {
+		t.shallDenyHs = true
+	}
 
 	t.neg = NoAuthSubneg{}
 
@@ -388,6 +409,8 @@ func (t *tester) String() string {
 	s += fmt.Sprintf("STAGE %s\n", t.getStage())
 	s += fmt.Sprintf("METHODS % 02X\n", t.methods)
 	s += fmt.Sprintf("CHOSEN %02X\n", t.mthChosen)
+	s += fmt.Sprintf("IS ONE OF METHODS %t\n", isByteOneOf(t.mthChosen, t.methods...))
+	s += fmt.Sprintf("SHALL DENY HS %t\n", t.shallDenyHs)
 	s += fmt.Sprintf("NEG %T\n", t.neg)
 	s += fmt.Sprintf("CMD %s REP1 %02X REP2 %02X\n", cmd2str(t.cmd), t.rep1, t.rep2)
 	s += fmt.Sprintf("ADDR REQ %s\n", t.addrReq)
@@ -433,24 +456,31 @@ func (t *tester) start(mngr *testMngr) {
 		panic("couldn't parse port from " + t.conn.LocalAddr().String())
 	}
 
+	t.test.Logf("tester %s starts", t.conn.LocalAddr())
 	mngr.regTester(t)
 	defer func() {
+		t.test.Logf("tester %s quits", t.conn.LocalAddr())
 		mngr.delTester(t)
-		// In case test manager is still trying to send stuff to tester
-		close(t.errChan)
-		close(t.hsChan)
-		close(t.reqChan)
 	}()
 
 	t.setStage("handshake")
 	t.hsChan = make(chan *Handshake)
 
-	if !t.writeHandshake() {
+	if t.malf.shouldFailHandshake() {
+		t.makeErrChan()
+
+		if !t.writeHandshake() {
+			return
+		}
+
+		t.chkMalformErr()
+
+		t.closeErrChan()
+
 		return
 	}
 
-	if t.malf.shouldFailHandshake() {
-		t.chkMalformErr()
+	if !t.writeHandshake() {
 		return
 	}
 
@@ -464,9 +494,19 @@ func (t *tester) start(mngr *testMngr) {
 		return
 	}
 
-	hs.Accept(t.mthChosen, t.neg)
+	if ok := t.chkAccpetHs(hs); !ok {
+		return
+	}
 
 	if !t.chkHsReply() {
+		return
+	}
+
+	if t.mthChosen == MethodNoAccepted {
+		return
+	}
+
+	if t.shallDenyHs {
 		return
 	}
 
@@ -477,12 +517,21 @@ func (t *tester) start(mngr *testMngr) {
 
 	t.setStage("request")
 
-	if !t.writeReq() {
+	if t.malf.shouldFailRequest() {
+		t.makeErrChan()
+
+		if !t.writeReq() {
+			return
+		}
+
+		t.chkMalformErr()
+
+		t.closeErrChan()
+
 		return
 	}
 
-	if t.malf.shouldFailRequest() {
-		t.chkMalformErr()
+	if !t.writeReq() {
 		return
 	}
 
@@ -537,9 +586,7 @@ func (t *tester) chkMalformErr() {
 	if !errors.Is(err, ErrMalformed) {
 		t.test.Logf("should receive ErrMalformed from server, but got %s. tester detail: \n%s\n", err, t.String())
 		t.test.Fail()
-		return
 	}
-	return
 }
 
 func (t *tester) chkHsMethods(hs *Handshake) (ok bool) {
@@ -550,6 +597,28 @@ func (t *tester) chkHsMethods(hs *Handshake) (ok bool) {
 		return false
 	}
 	return true
+}
+
+func (t *tester) chkAccpetHs(hs *Handshake) (ok bool) {
+	accepted := hs.Accept(t.mthChosen, t.neg)
+	if t.shallDenyHs == accepted {
+		msg := "server "
+		if accepted {
+			msg += "accepted "
+		} else {
+			msg += "denied "
+		}
+		msg += "handshake, but we expected it to "
+		if t.shallDenyHs {
+			msg += "deny it"
+		} else {
+			msg += "accept it"
+		}
+		t.test.Log(msg)
+		t.test.Logf("tester detail: \n%s\n", t.String())
+		t.test.Fail()
+	}
+	return
 }
 
 func (t *tester) chkHsReply() (ok bool) {
@@ -567,7 +636,7 @@ func (t *tester) chkHsReply() (ok bool) {
 		return false
 	}
 
-	if hsReply[1] != t.mthChosen {
+	if hsReply[1] != t.mthChosen && isByteOneOf(t.mthChosen, t.methods...) {
 		t.test.Logf("server replied handshake with method %02X, but we want %02X", hsReply[1], t.mthChosen)
 		t.test.Logf("tester detail: \n%s\n", t.String())
 		t.test.Fail()
@@ -591,12 +660,10 @@ func (t *tester) writeReq() (ok bool) {
 func (t *tester) rcvErr() *OpError {
 	cancel := time.After(100 * time.Millisecond)
 
-	test := t.mngr.t
-
 	select {
 	case <-cancel:
-		test.Logf("timed out receiving error from test manager, tester detail: %s\n", t.String())
-		test.Fail()
+		t.test.Logf("timed out receiving error from test manager, tester detail: %s\n", t.String())
+		t.test.Fail()
 		return nil
 	case err := <-t.errChan:
 		return err
@@ -817,4 +884,16 @@ func (t *tester) chkReply(rep byte, addr *AddrPort) (ok bool) {
 		return
 	}
 	return true
+}
+
+func (t *tester) makeErrChan() {
+	t.mux.Lock()
+	t.errChan = make(chan *OpError)
+	t.mux.Unlock()
+}
+
+func (t *tester) closeErrChan() {
+	t.mux.Lock()
+	close(t.errChan)
+	t.mux.Unlock()
 }

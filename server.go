@@ -47,6 +47,8 @@ type Server struct {
 	closers     map[closer]struct{}
 }
 
+// TODO Check nil receivers
+
 // Start starts the Server. No-op if it has been started.
 func (s *Server) Start(addr string) (err error) {
 	if s.started {
@@ -118,24 +120,24 @@ func (s *Server) regCloser(c closer) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.closers[c] = struct{}{}
-	s.dbgvv(nil, fmt.Sprintf("reg closer %#v", c))
+	s.dbgvv(newOpErr("reg closer", c, nil))
 }
 
 func (s *Server) regCloserNoLock(c closer) {
 	s.closers[c] = struct{}{}
-	s.dbgvv(nil, fmt.Sprintf("reg closer without locking %#v", c))
+	s.dbgvv(newOpErr("reg closer without locking", c, nil))
 }
 
 func (s *Server) delCloser(c closer) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	delete(s.closers, c)
-	s.dbgvv(nil, fmt.Sprintf("del closer %#v", c))
+	s.dbgvv(newOpErr("del closer", c, nil))
 }
 
 func (s *Server) delCloserNoLock(c closer) {
 	delete(s.closers, c)
-	s.dbgvv(nil, fmt.Sprintf("del closer without locking %#v", c))
+	s.dbgvv(newOpErr("del closer without locking", c, nil))
 }
 
 func (s *Server) closeCloser(c closer) error {
@@ -215,10 +217,10 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		hs.deny(true)
 	})
 	s.dbgv(newOpErr(
-		fmt.Sprintf("select method from one of % 02X", hs.methods),
+		fmt.Sprintf("select one method from % 02X", hs.methods),
 		conn, nil,
 	))
-	sent := s.selectMethod(&hs)
+	sent := s.selectMethod(hs)
 
 	if !sent || hs.timeoutDeny {
 		s.warn(nil, newOpErr("serve", conn, &RequestNotHandledError{Type: "handshake", Timeout: hs.timeoutDeny}))

@@ -63,7 +63,7 @@ func randBool() bool {
 
 func randIntExcept(n int, not ...int) int {
 	m := rand.Intn(n)
-	for isIntOneOf(n, not...) {
+	for isIntOneOf(m, not...) {
 		m = rand.Intn(n)
 	}
 	return m

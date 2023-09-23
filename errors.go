@@ -55,6 +55,9 @@ func (e *OpError) Error() string {
 }
 
 func (e *OpError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.Err
 }
 
@@ -95,5 +98,11 @@ func (e *RequestNotHandledError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("%s request not handled", e.Type)
+	var reason string
+	if e.Timeout {
+		reason = "timeout"
+	} else {
+		reason = "not sent"
+	}
+	return fmt.Sprintf("%s request not handled (%s)", e.Type, reason)
 }

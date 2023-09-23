@@ -163,6 +163,9 @@ func (a *AddrPort) String() string {
 	}
 	var host string
 	if a.Type == ATYPV4 || a.Type == ATYPV6 {
+		if ip, ok := netip.AddrFromSlice(a.Bytes); ok {
+			return netip.AddrPortFrom(ip, a.Port).String()
+		}
 		host = net.IP(a.Bytes).String()
 	} else if a.Type == ATYPDOMAIN {
 		host = string(a.Bytes)
@@ -238,27 +241,27 @@ type Handshake struct {
 	timeoutDeny bool
 }
 
-func readHandshake(reader io.Reader) (Handshake, error) {
-	hs := Handshake{
+func readHandshake(reader io.Reader) (*Handshake, error) {
+	hs := &Handshake{
 		wg:   new(sync.WaitGroup),
 		once: new(sync.Once),
 	}
 	var err error
 	hs.ver, err = readByte(reader)
 	if err != nil {
-		return Handshake{}, err
+		return nil, err
 	}
 	if hs.ver != VerSOCKS5 {
-		return Handshake{}, ErrMalformed
+		return nil, ErrMalformed
 	}
 	hs.nmethods, err = readByte(reader)
 	if err != nil {
-		return Handshake{}, err
+		return nil, err
 	}
 	hs.methods = make([]byte, hs.nmethods)
 	_, err = fillBuffer(hs.methods, reader)
 	if err != nil {
-		return Handshake{}, err
+		return nil, err
 	}
 	return hs, nil
 }
@@ -267,40 +270,43 @@ func readHandshake(reader io.Reader) (Handshake, error) {
 // if params are invalid, e.g. when method is MethodNoAccepted.
 //
 // Can be called only once, furthur calls are no-op.
-func (r *Handshake) Accept(method byte, neg Subnegotiator) {
-	if neg == nil && method != MethodNoAuth || method == MethodNoAccepted {
+func (r *Handshake) Accept(method byte, neg Subnegotiator) (ok bool) {
+	if neg == nil || method == MethodNoAccepted {
 		r.deny(false)
 		return
 	}
-	for _, m := range r.methods {
-		if m == method {
-			r.accept(method, neg)
-			return
-		}
+	if isByteOneOf(method, r.methods...) {
+		return r.accept(method, neg)
 	}
 	r.deny(false)
+	return
 }
 
-func (r *Handshake) accept(method byte, neg Subnegotiator) {
+func (r *Handshake) accept(method byte, neg Subnegotiator) (ok bool) {
 	r.once.Do(func() {
 		r.methodChosen = method
+		r.neg = neg
 		r.wg.Done()
+		ok = true
 	})
+	return
 }
 
 // Deny denies the handshake by returning NO ACCEPTABLE METHODS.
 //
 // Can be called only once, furthur calls are no-op.
-func (r *Handshake) Deny() {
-	r.deny(false)
+func (r *Handshake) Deny() (ok bool) {
+	return r.deny(false)
 }
 
-func (r *Handshake) deny(timeoutDeny bool) {
+func (r *Handshake) deny(timeoutDeny bool) (ok bool) {
 	r.once.Do(func() {
 		r.methodChosen = MethodNoAccepted
-		r.timeoutDeny = true
+		r.timeoutDeny = timeoutDeny
 		r.wg.Done()
+		ok = true
 	})
+	return
 }
 
 // Methods returns client's supported auth methods.
