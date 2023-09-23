@@ -21,18 +21,18 @@ import (
 // TODO test usr/pwd subnegotiation
 
 func TestSimulation(t *testing.T) {
-  mngr := testMngr{
-    s: &Server{},
-    t: t,
-  }
-  
-  if err := mngr.s.Start("localhost:4000"); err != nil {
-    panic(err)
-  }
+	mngr := testMngr{
+		s: &Server{},
+		t: t,
+	}
 
-  mngr.run(1 * time.Minute)
+	if err := mngr.s.Start("localhost:4000"); err != nil {
+		panic(err)
+	}
 
-  t.Logf("finished, %d testers run", mngr.nTests)
+	mngr.run(1 * time.Minute)
+
+	t.Logf("finished, %d testers run", mngr.nTests)
 }
 
 // ||||| Utils used in simulation test |||||
@@ -338,8 +338,8 @@ func newTester() *tester {
 	t.malf = newMalform()
 
 	t.rawHs = make([]byte, 1+1+len(t.methods))
-  t.rawHs[0] = VerSOCKS5
-  t.rawHs[1] = byte(len(t.methods))
+	t.rawHs[0] = VerSOCKS5
+	t.rawHs[1] = byte(len(t.methods))
 	copy(t.rawHs[2:], t.methods)
 
 	aBytes, err := t.addrReq.MarshalBinary()
@@ -423,15 +423,15 @@ func (t *tester) start(mngr *testMngr) {
 		return
 	}
 
-  _, portS, err := net.SplitHostPort(t.conn.LocalAddr().String())
-  if err != nil {
-    panic(err)
-  }
-  var ok bool
-  t.port, ok = parseUint16(portS)
-  if !ok {
-    panic("couldn't parse port from "+t.conn.LocalAddr().String())
-  }
+	_, portS, err := net.SplitHostPort(t.conn.LocalAddr().String())
+	if err != nil {
+		panic(err)
+	}
+	var ok bool
+	t.port, ok = parseUint16(portS)
+	if !ok {
+		panic("couldn't parse port from " + t.conn.LocalAddr().String())
+	}
 
 	mngr.regTester(t)
 	defer func() {

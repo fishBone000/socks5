@@ -62,7 +62,7 @@ func (s *Server) Start(addr string) (err error) {
 	}
 	s.started = true // mux is not needed here
 
-  s.closers = map[closer]struct{}{}
+	s.closers = map[closer]struct{}{}
 	s.regCloser(s.listener)
 
 	s.info(nil, "server started, listening for", s.listener.Addr())
@@ -215,9 +215,9 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 		hs.deny(true)
 	})
 	s.dbgv(newOpErr(
-    fmt.Sprintf("select method from one of % 02X", hs.methods), 
-    conn, nil,
-  ))
+		fmt.Sprintf("select method from one of % 02X", hs.methods),
+		conn, nil,
+	))
 	sent := s.selectMethod(&hs)
 
 	if !sent || hs.timeoutDeny {
