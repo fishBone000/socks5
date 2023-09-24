@@ -18,12 +18,15 @@ import (
 // TODO test auto deny
 // TODO test chan discarding
 // TODO test parsing from string to Addr
-// TODO test usr/pwd subnegotiation
+
+const (
+	timeoutRcv    = 100 * time.Millisecond
+)
 
 func TestSimulation(t *testing.T) {
 	mngr := testMngr{}
 
-	mngr.run(30*time.Minute, 50*time.Millisecond, t)
+	mngr.run(8*time.Minute, 5*time.Millisecond, t)
 
 	t.Logf("finished, %d testers run", mngr.nTests)
 }
@@ -80,6 +83,7 @@ type testMngr struct {
 
 	mux     sync.Mutex
 	stop    chan struct{}
+  quit chan struct{}
 	testers map[uint16]*tester
 	nTests  int
 }
@@ -107,6 +111,7 @@ func (m *testMngr) run(testTime, interval time.Duration, t *testing.T) {
 	}
 
 	m.stop = make(chan struct{})
+	m.quit = make(chan struct{})
 	m.testers = map[uint16]*tester{}
 	var stopT time.Time
 	time.AfterFunc(testTime, func() {
@@ -116,21 +121,17 @@ func (m *testMngr) run(testTime, interval time.Duration, t *testing.T) {
 
 	prevTestTime := time.Time{}
 
-	defer func() {
-		if err := recover(); err != nil {
-			fmt.Printf("recovered panic: %s", err)
-		}
-	}()
-
 	for {
 		select {
 		case <-m.stop:
 			m.waitFinish(stopT)
+      close(m.quit)
 			return
 		default:
 			if m.t.Failed() {
 				// Wait outputting all remaining logs
 				time.Sleep(100 * time.Millisecond)
+        close(m.quit)
 				return
 			}
 
@@ -157,7 +158,7 @@ Loop:
 			go m.dispatchReq(req)
 		case hs := <-hsChan:
 			go m.dispatchHandshake(hs)
-		case <-m.stop:
+		case <-m.quit:
 			break Loop
 		}
 	}
@@ -284,7 +285,7 @@ type tester struct {
 	methods     []byte
 	mthChosen   byte
 	shallDenyHs bool
-	neg         Subnegotiator
+	neg         clSubneg
 	rep1        byte // First reply code
 	rep2        byte // Second reply code, used in BND only
 	addrReq     *AddrPort
@@ -296,6 +297,7 @@ type tester struct {
 	rawReq      []byte
 
 	conn    net.Conn
+	capper  Capsulator
 	test    *testing.T
 	mux     sync.Mutex
 	port    uint16
@@ -337,7 +339,14 @@ func newTester() *tester {
 		t.shallDenyHs = true
 	}
 
-	t.neg = NoAuthSubneg{}
+	switch rand.Intn(3) {
+	case 0:
+		t.neg = clNoAuthSubneg{}
+	case 1:
+		t.neg = newClUsrPwdSubneg()
+	case 2:
+		t.neg = new(capNeg)
+	}
 
 	if rand.Intn(100) < 75 {
 		t.rep1 = RepSucceeded
@@ -411,7 +420,7 @@ func (t *tester) String() string {
 	s += fmt.Sprintf("CHOSEN %02X\n", t.mthChosen)
 	s += fmt.Sprintf("IS ONE OF METHODS %t\n", isByteOneOf(t.mthChosen, t.methods...))
 	s += fmt.Sprintf("SHALL DENY HS %t\n", t.shallDenyHs)
-	s += fmt.Sprintf("NEG %T\n", t.neg)
+	s += fmt.Sprintf("NEG DETAIL:\n%s", t.neg.String())
 	s += fmt.Sprintf("CMD %s REP1 %02X REP2 %02X\n", cmd2str(t.cmd), t.rep1, t.rep2)
 	s += fmt.Sprintf("ADDR REQ %s\n", t.addrReq)
 	s += fmt.Sprintf("ADDR REP1 %s\n", t.addrRep1)
@@ -466,6 +475,8 @@ func (t *tester) start(mngr *testMngr) {
 	t.setStage("handshake")
 	t.hsChan = make(chan *Handshake)
 
+	time.Sleep(randLatency())
+
 	if t.malf.shouldFailHandshake() {
 		t.makeErrChan()
 
@@ -483,6 +494,8 @@ func (t *tester) start(mngr *testMngr) {
 	if !t.writeHandshake() {
 		return
 	}
+
+	time.Sleep(randLatency())
 
 	hs := t.rcvHs()
 	close(t.hsChan)
@@ -512,10 +525,25 @@ func (t *tester) start(mngr *testMngr) {
 
 	t.setStage("subnegotiation")
 
-	// TODO Add more subneg tests
-	// TODO Add capsulation tests
+  time.Sleep(randLatency())
+
+	if ok := t.chkSubnegotiate(); !ok {
+		return
+	}
+
+	if t.neg.isMalformed() {
+		t.chkMalformErr()
+		return
+	}
+
+	if t.neg.willFailAuth() {
+		t.chkErrAuthFailed()
+		return
+	}
 
 	t.setStage("request")
+
+  time.Sleep(randLatency())
 
 	if t.malf.shouldFailRequest() {
 		t.makeErrChan()
@@ -541,6 +569,8 @@ func (t *tester) start(mngr *testMngr) {
 	if req == nil {
 		return
 	}
+
+  time.Sleep(randLatency())
 
 	switch req := req.(type) {
 	case *ConnectRequest:
@@ -600,7 +630,7 @@ func (t *tester) chkHsMethods(hs *Handshake) (ok bool) {
 }
 
 func (t *tester) chkAccpetHs(hs *Handshake) (ok bool) {
-	accepted := hs.Accept(t.mthChosen, t.neg)
+	accepted := hs.Accept(t.mthChosen, t.neg.getServerSubneg())
 	if t.shallDenyHs == accepted {
 		msg := "server "
 		if accepted {
@@ -645,8 +675,30 @@ func (t *tester) chkHsReply() (ok bool) {
 	return true
 }
 
+func (t *tester) chkSubnegotiate() (ok bool) {
+	var err error
+	t.capper, err = t.neg.Negotiate(t.conn)
+	if err != nil {
+		t.test.Logf("failed to subnegotiate: %s. tester detail: \n%s\n", err, t.String())
+		t.test.Fail()
+		return false
+	}
+	return true
+}
+
+func (t *tester) chkErrAuthFailed() {
+	opErr := t.rcvErr()
+	if errors.Is(opErr, ErrAuthFailed) {
+		return
+	}
+	t.test.Logf("expected ErrAuthFailed, but got %s", opErr)
+	t.test.Logf("tester detail: %s", t.String())
+	t.test.Fail()
+	return
+}
+
 func (t *tester) writeReq() (ok bool) {
-	if _, err := t.conn.Write(t.rawReq); err != nil {
+	if _, err := t.capper.Write(t.rawReq); err != nil {
 		if !t.malf.shouldFailRequest() {
 			t.test.Logf("tester failed to write request: %s", err)
 			t.test.Fail()
@@ -658,7 +710,7 @@ func (t *tester) writeReq() (ok bool) {
 }
 
 func (t *tester) rcvErr() *OpError {
-	cancel := time.After(100 * time.Millisecond)
+	cancel := time.After(timeoutRcv)
 
 	select {
 	case <-cancel:
@@ -671,7 +723,7 @@ func (t *tester) rcvErr() *OpError {
 }
 
 func (t *tester) rcvHs() *Handshake {
-	cancel := time.After(100 * time.Millisecond)
+	cancel := time.After(timeoutRcv)
 
 	test := t.mngr.t
 
@@ -686,7 +738,7 @@ func (t *tester) rcvHs() *Handshake {
 }
 
 func (t *tester) rcvReq() any {
-	cancel := time.After(100 * time.Millisecond)
+	cancel := time.After(timeoutRcv)
 
 	test := t.mngr.t
 
@@ -711,11 +763,11 @@ func (t *tester) testConnect(req *ConnectRequest) {
 			return
 		}
 
-		if ok := t.chkReply(t.rep1, t.addrRep1); !ok {
+		if ok := t.chkReqReply(t.rep1, t.addrRep1); !ok {
 			return
 		}
 
-		err := chkIntegrity(t.conn, remote)
+		err := chkIntegrity(remote, t.capper)
 		if err != nil {
 			t.test.Logf("check CONNECT data integrity failed: %s. tester detail: \n%s\n", err, t.String())
 			t.test.Fail()
@@ -725,7 +777,7 @@ func (t *tester) testConnect(req *ConnectRequest) {
 
 	req.Deny(t.rep1, t.addrRep1.String())
 
-	t.chkReply(t.rep1, t.addrRep1)
+	t.chkReqReply(t.rep1, t.addrRep1)
 	t.conn.Close()
 }
 
@@ -736,9 +788,11 @@ func (t *tester) testBind(req *BindRequest) {
 		req.Deny(t.rep1, t.addrRep1.String())
 	}
 
-	if ok := t.chkReply(t.rep1, t.addrRep1); !ok || t.rep1 != RepSucceeded {
+	if ok := t.chkReqReply(t.rep1, t.addrRep1); !ok || t.rep1 != RepSucceeded {
 		return
 	}
+
+  time.Sleep(randLatency())
 
 	var local, remote *pipeConn
 	if t.rep2 == RepSucceeded {
@@ -750,11 +804,11 @@ func (t *tester) testBind(req *BindRequest) {
 			return
 		}
 
-		if ok := t.chkReply(t.rep2, t.addrRep2); !ok {
+		if ok := t.chkReqReply(t.rep2, t.addrRep2); !ok {
 			return
 		}
 
-		if err := chkIntegrity(t.conn, remote); err != nil {
+		if err := chkIntegrity(remote, t.capper); err != nil {
 			t.test.Logf(
 				"check integrity failed: %s. tester detail: \n%s\n",
 				err, t.String(),
@@ -770,7 +824,7 @@ func (t *tester) testBind(req *BindRequest) {
 		return
 	}
 
-	t.chkReply(t.rep2, t.addrRep2)
+	t.chkReqReply(t.rep2, t.addrRep2)
 
 	return
 }
@@ -810,7 +864,7 @@ func (t *tester) testAssoc(req *AssocRequest) {
 		}
 	}
 
-	if ok := t.chkReply(t.rep1, t.addrRep1); !ok || t.rep1 != RepSucceeded {
+	if ok := t.chkReqReply(t.rep1, t.addrRep1); !ok || t.rep1 != RepSucceeded {
 		return
 	}
 
@@ -860,8 +914,8 @@ func (t *tester) testAssoc(req *AssocRequest) {
 	}
 }
 
-func (t *tester) chkReply(rep byte, addr *AddrPort) (ok bool) {
-	reply, err := readReply(t.conn)
+func (t *tester) chkReqReply(rep byte, addr *AddrPort) (ok bool) {
+	reply, err := readReqReply(t.capper)
 	if err != nil {
 		t.test.Logf("failed to read reply from server: %s. tester detail: \n%s\n", err, t.String())
 		t.test.Fail()

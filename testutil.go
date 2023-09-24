@@ -94,7 +94,14 @@ func (c *pipeConn) RemoteAddr() net.Addr {
 	return c.raddr
 }
 
-func chkIntegrity(a, b io.ReadWriteCloser) error {
+func randLatency() time.Duration {
+  center := 125 * time.Millisecond
+  delta := time.Duration(rand.Intn(100))-50
+  delta *= time.Millisecond
+  return center + delta
+}
+
+func chkIntegrity(a io.ReadWriteCloser, b io.ReadWriter) error {
 	wErrChan := make(chan error, 2)
 	rErrChan := make(chan error, 2)
 	data := make([]byte, 1_000_000)
@@ -150,7 +157,7 @@ func chkIntegrity(a, b io.ReadWriteCloser) error {
 	return nil
 }
 
-func readReply(r io.Reader) (*reply, error) {
+func readReqReply(r io.Reader) (*reply, error) {
 	rBuffer := make([]byte, 3)
 	_, err := io.ReadFull(r, rBuffer)
 	if err != nil {
@@ -177,11 +184,16 @@ func readReply(r io.Reader) (*reply, error) {
 }
 
 type clSubneg interface {
+  // Subnegotiate on client side, for server side, 
+  // use the Subneg returned by getServerSubneg.
+  // If the client side subneg is malformed, it shall write malformed msg 
+  // and return nil error. 
 	Subnegotiator
 	getServerSubneg() Subnegotiator
 	String() string
-	shouldFail() bool
-	chkErr() (ok bool)
+  isMalformed() bool
+	willFailAuth() bool
+	chkErr(error) (ok bool)
 }
 
 type clNoAuthSubneg struct {
@@ -198,11 +210,15 @@ func (n clNoAuthSubneg) String() string {
 	return s
 }
 
-func (n clNoAuthSubneg) shouldFail() bool {
+func (n clNoAuthSubneg) isMalformed() bool {
+  return false
+}
+
+func (n clNoAuthSubneg) willFailAuth() bool {
 	return false
 }
 
-func (n clNoAuthSubneg) chkErr() (ok bool) {
+func (n clNoAuthSubneg) chkErr(err error) (ok bool) {
 	return false
 }
 
@@ -244,7 +260,9 @@ func newClUsrPwdSubneg() *clUsrPwdSubneg {
   }
 
   neg.List = make([][][]byte, rand.Intn(5))
-  for _, pair := range neg.List {
+  for i := range neg.List {
+    neg.List[i] = make([][]byte, 2)
+    pair := neg.List[i]
     pair[0] = make([]byte, rand.Intn(256))
     pair[1] = make([]byte, rand.Intn(256))
     if _, err := crand.Read(pair[0]); err != nil {
@@ -267,12 +285,14 @@ func newClUsrPwdSubneg() *clUsrPwdSubneg {
 }
 
 func (n *clUsrPwdSubneg) Negotiate(rw io.ReadWriter) (Capsulator, error) {
-	if _, err := rw.Write(n.raw); err != nil {
-		return nil, err
-	}
+	_, err := rw.Write(n.raw)
 
   if n.malfVer {
     return NoCap{}, nil
+  }
+
+  if err != nil {
+    return nil, err
   }
 
   rBuffer := make([]byte, 2)
@@ -319,8 +339,22 @@ func (n *clUsrPwdSubneg) String() string {
   return s
 }
 
-func (n *clUsrPwdSubneg) shouldFail() bool {
-  return n.malfVer || n.shallFailAuth
+func (n *clUsrPwdSubneg) willFailAuth() bool {
+  return n.shallFailAuth
+}
+
+func (n *clUsrPwdSubneg) isMalformed() bool {
+  return n.malfVer
+}
+
+func (n *clUsrPwdSubneg) chkErr(err error) bool {
+  if n.malfVer {
+    return errors.Is(err, ErrMalformed)
+  }
+  if n.shallFailAuth {
+    return errors.Is(err, ErrAuthFailed)
+  }
+  return false
 }
 
 // Subnegotiator for capsulation test
@@ -361,11 +395,15 @@ func (cp *capNeg) String() string {
   return fmt.Sprintf("  TYPE CAPSULATION TEST SUBNEGOTIATOR\n")
 }
 
-func (cp *capNeg) shouldFail() bool {
+func (cp *capNeg) willFailAuth() bool {
   return false
 }
 
-func (cp *capNeg) chkErr() bool {
+func (cp *capNeg) isMalformed() bool {
+  return false
+}
+
+func (cp *capNeg) chkErr(err error) bool {
   return false
 }
 
