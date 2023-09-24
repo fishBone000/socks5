@@ -35,7 +35,8 @@ type Capsulator interface {
 	io.ReadWriter
 
 	// Used for UDP packets. Packet is dropped if non-nil error is returned.
-	// Server doesn't actually invoke these methods.
+	// Server doesn't actually invoke these methods, 
+  // they are here just for convenience. 
 	EncapPacket(p []byte) ([]byte, error)
 	DecapPacket(p []byte) ([]byte, error)
 }
@@ -81,7 +82,7 @@ func (c NoCap) DecapPacket(p []byte) ([]byte, error) {
 type UsrPwdSubneg struct {
 	// List of username password pair.
 	// A list entry is to be ignored if its number of elements is not 2.
-	List [][]byte
+	List [][][]byte
 }
 
 func (n UsrPwdSubneg) Negotiate(rw io.ReadWriter) (c Capsulator, err error) {
@@ -96,14 +97,22 @@ func (n UsrPwdSubneg) Negotiate(rw io.ReadWriter) (c Capsulator, err error) {
 
 	var ulen, plen byte
 	var uname, passwd []byte
+
 	if ulen, err = readByte(rw); err != nil {
 		return nil, err
 	}
 	uname = make([]byte, ulen)
+  if _, err := io.ReadFull(rw, uname); err != nil {
+    return nil, err
+  }
+
 	if plen, err = readByte(rw); err != nil {
 		return nil, err
 	}
 	passwd = make([]byte, plen)
+  if _, err := io.ReadFull(rw, passwd); err != nil {
+    return nil, err
+  }
 
 	reply := []byte{VerUsrPwd, 0x01}
 	for _, pair := range n.List {

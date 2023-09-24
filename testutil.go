@@ -175,3 +175,222 @@ func readReply(r io.Reader) (*reply, error) {
 	rply.addr = addr
 	return rply, nil
 }
+
+type clSubneg interface {
+	Subnegotiator
+	getServerSubneg() Subnegotiator
+	String() string
+	shouldFail() bool
+	chkErr() (ok bool)
+}
+
+type clNoAuthSubneg struct {
+	NoAuthSubneg
+}
+
+func (n clNoAuthSubneg) getServerSubneg() Subnegotiator {
+	return NoAuthSubneg{}
+}
+
+func (n clNoAuthSubneg) String() string {
+	s := ""
+	s += fmt.Sprintf("  TYPE NO AUTH\n")
+	return s
+}
+
+func (n clNoAuthSubneg) shouldFail() bool {
+	return false
+}
+
+func (n clNoAuthSubneg) chkErr() (ok bool) {
+	return false
+}
+
+type clUsrPwdSubneg struct {
+	UsrPwdSubneg
+	usr []byte
+	pwd []byte
+  raw []byte
+
+	malfVer       bool
+	shallFailAuth bool
+}
+
+func newClUsrPwdSubneg() *clUsrPwdSubneg {
+  neg := new(clUsrPwdSubneg)
+  neg.usr = make([]byte, rand.Intn(256))
+  neg.pwd = make([]byte, rand.Intn(256))
+
+  if _, err := crand.Read(neg.usr); err != nil {
+    panic(err)
+  }
+  if _, err := crand.Read(neg.pwd); err != nil {
+    panic(err)
+  }
+
+	ulen := len(neg.usr)
+	plen := len(neg.pwd)
+	raw := make([]byte, 1+1+ulen+1+plen)
+	raw[0] = VerUsrPwd
+	raw[1] = byte(ulen)
+	copy(raw[2:], neg.usr)
+	raw[2+ulen] = byte(plen)
+	copy(raw[2+ulen+1:], neg.pwd)
+
+  neg.malfVer = randBool()
+
+  if neg.malfVer {
+    raw[0] = byte(randIntExcept(256, int(VerUsrPwd)))
+  }
+
+  neg.List = make([][][]byte, rand.Intn(5))
+  for _, pair := range neg.List {
+    pair[0] = make([]byte, rand.Intn(256))
+    pair[1] = make([]byte, rand.Intn(256))
+    if _, err := crand.Read(pair[0]); err != nil {
+      panic(err)
+    }
+    if _, err := crand.Read(pair[0]); err != nil {
+      panic(err)
+    }
+  }
+
+  i := rand.Intn(5)
+  if i < len(neg.List) {
+    neg.List[i][0] = neg.usr
+    neg.List[i][1] = neg.pwd
+  } else {
+    neg.shallFailAuth = true
+  }
+
+  return neg
+}
+
+func (n *clUsrPwdSubneg) Negotiate(rw io.ReadWriter) (Capsulator, error) {
+	if _, err := rw.Write(n.raw); err != nil {
+		return nil, err
+	}
+
+  if n.malfVer {
+    return NoCap{}, nil
+  }
+
+  rBuffer := make([]byte, 2)
+  if _, err := io.ReadFull(rw, rBuffer); err != nil {
+    return nil, err
+  }
+  if rBuffer[0] != VerUsrPwd {
+    return nil, errors.New(fmt.Sprintf("server replied subneg with VER %02X", rBuffer[0]))
+  }
+  if !n.shallFailAuth != (rBuffer[1] == 0x00) {
+    msg := "server "
+    if rBuffer[1] == 0x00 {
+      msg += "accepted "
+    } else {
+      msg += "rejected "
+    }
+    msg += "subnegotiation, but we expected "
+    if n.shallFailAuth {
+      msg += "rejection"
+    } else {
+      msg += "acceptance"
+    }
+    return nil, errors.New(msg)
+  }
+  return NoCap{}, nil
+}
+
+func (n *clUsrPwdSubneg) getServerSubneg() Subnegotiator {
+	return n.UsrPwdSubneg
+}
+
+func (n *clUsrPwdSubneg) String() string {
+  s := ""
+  s += fmt.Sprintf("  TYPE USR/PWD\n")
+  s += fmt.Sprintf("  USR %02X\n", n.usr)
+  s += fmt.Sprintf("  PWD %02X\n", n.pwd)
+  for i, pair := range n.List {
+    s += fmt.Sprintf("    LIST ENTRY %d USR %02X\n", i, pair[i][0])
+    s += fmt.Sprintf("    LIST ENTRY %d PWD %02X\n", i, pair[i][1])
+  }
+  s += fmt.Sprintf("  MALF VER %t\n", n.malfVer)
+  s += fmt.Sprintf("  SHALL FAIL AUTH %t\n", n.shallFailAuth)
+  s += fmt.Sprintf("  RAW %02X\n", n.raw)
+  return s
+}
+
+func (n *clUsrPwdSubneg) shouldFail() bool {
+  return n.malfVer || n.shallFailAuth
+}
+
+// Subnegotiator for capsulation test
+// It also implements Capsulator for convinience
+type capNeg struct {
+  rw io.ReadWriter
+}
+
+func (cp *capNeg) Negotiate(rw io.ReadWriter) (Capsulator, error) {
+  cp.rw = rw
+
+  raw := make([]byte, 5)
+  for i := range raw {
+    raw[i] = byte(i)
+  }
+  
+  if _, err := rw.Write(raw); err != nil {
+    return nil, err
+  }
+
+  rBuffer := make([]byte, 5)
+  if _, err := io.ReadFull(rw, rBuffer); err != nil {
+    return nil, err
+  }
+  
+  if !reflect.DeepEqual(rBuffer, raw) {
+    return nil, ErrMalformed
+  }
+
+  return cp, nil
+}
+
+func (cp *capNeg) getServerSubneg() Subnegotiator {
+  return cp
+}
+
+func (cp *capNeg) String() string {
+  return fmt.Sprintf("  TYPE CAPSULATION TEST SUBNEGOTIATOR\n")
+}
+
+func (cp *capNeg) shouldFail() bool {
+  return false
+}
+
+func (cp *capNeg) chkErr() bool {
+  return false
+}
+
+func (cp *capNeg) Read(p []byte) (n int, err error) {
+  n, err = cp.rw.Read(p)
+  for i := 0; i < n; i++ {
+    p[i] ^= 0xFF
+  }
+  return
+}
+
+func (cp *capNeg) Write(p []byte) (n int, err error) {
+  q := make([]byte, len(p))
+  copy(q, p)
+  for i := range q {
+    q[i] ^= 0xFF
+  }
+  n, err = cp.rw.Write(q)
+  return
+}
+
+func (cp *capNeg) EncapPacket(p []byte) ([]byte, error) {
+  return nil, nil
+}
+
+func (cp *capNeg) DecapPacket(p []byte) ([]byte, error) {
+  return nil, nil
+}
