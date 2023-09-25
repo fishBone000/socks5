@@ -13,6 +13,10 @@ var ErrMalformed = errors.New("malformed")
 // if [Server] is not up.  
 var ErrNotStarted = errors.New("not started")
 
+// ErrAcceptOrDenyFailed is used by [Connector], [Binder] and [Associator]. 
+// It indicates the accept and deny methods of the request returned not ok. 
+var ErrAcceptOrDenyFailed = errors.New("request already handled")
+
 // An OpError contains Op string describing in which operation has the error occured.
 type OpError struct {
 	Op         string // E.g. "read handshake", "serve", "close listener".

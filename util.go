@@ -203,3 +203,9 @@ func isByteOneOf(a byte, bytes ...byte) bool {
 	}
 	return false
 }
+
+func cpySlice(src []byte) (result []byte) {
+  result = make([]byte, len(src))
+  copy(result, src)
+  return
+}

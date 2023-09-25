@@ -26,7 +26,7 @@ const (
 func TestSimulation(t *testing.T) {
 	mngr := testMngr{}
 
-	mngr.run(8*time.Minute, 5*time.Millisecond, t)
+	mngr.run(30*time.Minute, 100*time.Millisecond, t)
 
 	t.Logf("finished, %d testers run", mngr.nTests)
 }
@@ -105,10 +105,15 @@ func (m *testMngr) run(testTime, interval time.Duration, t *testing.T) {
 	m.t = t
 
 	m.s = &Server{}
+  waitStart := sync.WaitGroup{}
+  waitStart.Add(1)
 	go m.dispatch()
-	if err := m.s.Serve("localhost:4000"); err != nil {
-		panic(err)
-	}
+  go func()  {
+    waitStart.Done()
+    if err := m.s.Serve("localhost:4000"); err != nil {
+      panic("serve failed: "+err.Error())
+    }
+  }()
 
 	m.stop = make(chan struct{})
 	m.quit = make(chan struct{})
@@ -121,6 +126,8 @@ func (m *testMngr) run(testTime, interval time.Duration, t *testing.T) {
 
 	prevTestTime := time.Time{}
 
+  waitStart.Wait()
+  time.Sleep(50 * time.Millisecond)
 	for {
 		select {
 		case <-m.stop:
