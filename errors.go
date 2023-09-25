@@ -9,6 +9,10 @@ import (
 // ErrMalformed is returned when request/response does not follow SOCKS5 protocol.
 var ErrMalformed = errors.New("malformed")
 
+// ErrNotStarted is returned by [Server.Close] and [Server.CloseAll] 
+// if [Server] is not up.  
+var ErrNotStarted = errors.New("not started")
+
 // An OpError contains Op string describing in which operation has the error occured.
 type OpError struct {
 	Op         string // E.g. "read handshake", "serve", "close listener".

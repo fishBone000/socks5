@@ -106,7 +106,7 @@ func (m *testMngr) run(testTime, interval time.Duration, t *testing.T) {
 
 	m.s = &Server{}
 	go m.dispatch()
-	if err := m.s.Start("localhost:4000"); err != nil {
+	if err := m.s.Serve("localhost:4000"); err != nil {
 		panic(err)
 	}
 

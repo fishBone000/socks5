@@ -71,7 +71,7 @@ func conn2str(conn net.Conn) string {
 	return s
 }
 
-func closer2str(c closer) string {
+func closerType(c closer) string {
 	switch c := c.(type) {
 	case net.Listener:
 		return fmt.Sprintf("listener")

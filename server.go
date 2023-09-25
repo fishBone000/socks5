@@ -36,94 +36,145 @@ const (
 // If no channel is created or channel is full, corresponding log entries are
 // discarded, handshakes, or requests are denied.
 type Server struct {
-	addr        *net.TCPAddr
 	listener    *net.TCPListener
 	mux         sync.Mutex
 	logChan     chan LogEntry
 	hndshkChan  chan *Handshake
 	requestChan chan any
-	started     bool
-	down        bool
+	up          bool
 	closers     map[closer]struct{}
 }
 
 // TODO Check nil receivers
 
-// Start starts the Server. No-op if it has been started.
-func (s *Server) Start(addr string) (err error) {
-	if s.started {
+// Serve starts the Server and blocks until any error occured or closed by 
+// [Server.Close] or [Server.CloseAll]. 
+// No-op and no blocking if it has been started. 
+//
+// [Server.ServeClient] can be invoked without starting the server
+// if you want to handle listening yourself.
+func (s *Server) Serve(addr string) (err error) {
+  s.mux.Lock()
+	if s.up {
+    s.mux.Unlock()
 		return nil
 	}
+  s.mux.Unlock()
 
-	if s.addr, err = net.ResolveTCPAddr("tcp", addr); err != nil {
-		return err
+  var tcpAddr *net.TCPAddr
+	if tcpAddr, err = net.ResolveTCPAddr("tcp", addr); err != nil {
+		return
 	}
 
-	if s.listener, err = net.ListenTCP(s.addr.Network(), s.addr); err != nil {
-		return err
+  s.mux.Lock()
+	if s.listener, err = net.ListenTCP(tcpAddr.Network(), tcpAddr); err != nil {
+    s.listener = nil
+    s.mux.Unlock()
+		return
 	}
-	s.started = true // mux is not needed here
+	s.up = true
 
-	s.closers = map[closer]struct{}{}
-	s.regCloser(s.listener)
+  if s.closers == nil {
+    s.closers = make(map[closer]struct{})
+  }
+	s.regCloserNoLock(s.listener)
+  s.mux.Unlock()
 
-	s.info(nil, "server started, listening for", s.listener.Addr())
+	s.info(newOpErr("start server", s.listener, nil))
 
-	go s.listen()
-	return
+	for {
+    var conn *net.TCPConn
+		conn, err = s.listener.AcceptTCP()
+		if err != nil {
+			s.mux.Lock()
+			defer s.mux.Unlock()
+			if !s.up {
+				s.err(newOpErr("listen", s.listener, err))
+				s.up = false
+			}
+			s.delCloserNoLock(s.listener)
+			return
+		}
+
+		s.info(newOpErr("new connection", conn, nil))
+		s.regCloser(conn)
+
+		go s.ServeClient(conn)
+	}
 }
 
+// Running reports whether s is listening. 
 func (s *Server) Running() bool {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	return s.started && !s.down
+	return s.up
 }
 
 func (s *Server) Addr() net.Addr {
+  s.mux.Lock()
+  defer s.mux.Unlock()
 	if s.listener == nil {
 		return nil
 	}
 	return s.listener.Addr()
 }
 
-// Close closes the internal listener. Connections established are not closed.
-func (s *Server) Close() {
+// Close closes the internal listener. It's useful if you want to stop the [Server], 
+// while wait for all remaining sessions to finish. 
+// Returns [ErrNotStarted] if s is not started. 
+// Connections established are not closed.
+func (s *Server) Close() (err error) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	s.down = true
+	if !s.up {
+		return ErrNotStarted
+	}
+	s.up = false
 	s.info(newOpErr("server shut down", nil, nil))
-	if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	if err = s.listener.Close(); err != nil {
 		s.warn(newOpErr("close listener", s.listener, err))
 	}
 	s.delCloserNoLock(s.listener)
+  return
 }
 
-// CloseAll closes the internal listener and all established connections.
-// If a connection has failed to close,
+// CloseAll closes the internal listener and all established connections. 
+// It's useful if you want to stop the [Server] and kill all sessions. 
+//
+// If s is not started, CloseAll closes established connections only. 
+// If a connection or listener has failed to close,
 // the [Server] won't try to close it next time.
-func (s *Server) CloseAll() {
+func (s *Server) CloseAll() (errs []error){
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	s.down = true
+	s.up = false
 	s.info(newOpErr("server shut down", nil, nil))
 	for c := range s.closers {
-		s.info(newOpErr("close "+closer2str(c), c, nil))
-		err := c.Close()
-		if err != nil {
-			s.warn(err, newOpErr("close "+closer2str(c), c, err))
+		s.info(newOpErr("close "+closerType(c), c, nil))
+		
+		if err := c.Close(); err != nil {
+      errs = append(errs, err)
+			s.warn(err, newOpErr("close "+closerType(c), c, err))
 		}
 		s.delCloserNoLock(c)
 	}
+  return
 }
 
 func (s *Server) regCloser(c closer) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
+  if s.closers == nil {
+    s.closers = map[closer]struct{}{}
+  }
 	s.closers[c] = struct{}{}
 	s.dbgvv(newOpErr("reg closer", c, nil))
 }
 
 func (s *Server) regCloserNoLock(c closer) {
+  if s.closers == nil {
+    s.closers = map[closer]struct{}{}
+  }
 	s.closers[c] = struct{}{}
 	s.dbgvv(newOpErr("reg closer without locking", c, nil))
 }
@@ -144,10 +195,10 @@ func (s *Server) closeCloser(c closer) error {
 	if c == nil {
 		return nil
 	}
-	s.info(newOpErr("close "+closer2str(c), c, nil))
+	s.info(newOpErr("close "+closerType(c), c, nil))
 	err := c.Close()
 	if err != nil && !errors.Is(err, net.ErrClosed) {
-		s.warn(newOpErr("close "+closer2str(c), c, err))
+		s.warn(newOpErr("close "+closerType(c), c, err))
 	}
 	s.delCloser(c)
 	return err
@@ -183,27 +234,15 @@ func (s *Server) RequestChan() <-chan any {
 }
 
 func (s *Server) listen() {
-	for {
-		conn, err := s.listener.AcceptTCP()
-		if err != nil {
-			s.mux.Lock()
-			defer s.mux.Unlock()
-			if !s.down {
-				s.err(newOpErr("listen", s.listener, err))
-				s.down = true
-			}
-			s.delCloser(s.listener)
-			return
-		}
-
-		s.info(newOpErr("new connection", conn, nil))
-		s.regCloser(conn)
-
-		go s.serveClient(conn)
-	}
 }
 
-func (s *Server) serveClient(conn *net.TCPConn) {
+// ServeClient starts serving the client and blocks til finish.
+// ServeClient can be invoked without s being started,
+// this is useful if inbound connection listening need to be handled explicitly.
+//
+// Note that [Server.Close] and [Server.CloseAll] will still try to close
+// connections created during serving, even if the server is not started.
+func (s *Server) ServeClient(conn *net.TCPConn) {
 	hs, err := readHandshake(conn)
 	if err != nil {
 		s.err(newOpErr("read handshake", conn, err))
@@ -356,7 +395,6 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 	case CmdASSOC:
 		s.handleAssoc(wrappedReq.(*AssocRequest), conn)
 	}
-	return
 }
 
 func (s *Server) handleConnect(r *ConnectRequest, capper Capsulator, conn net.Conn) {
@@ -420,10 +458,22 @@ func (s *Server) handleBind(r *BindRequest, capper Capsulator, conn net.Conn) {
 func (s *Server) handleAssoc(r *AssocRequest, conn net.Conn) {
 	if r.reply.rep != RepSucceeded {
 		time.AfterFunc(PeriodClose, func() {
-			s.closeCloser(conn)
 			r.terminate()
+			s.closeCloser(conn)
 		})
+    return
 	}
+
+  _, err := io.Copy(io.Discard, conn)
+  r.notifyOnce.Do(func() {
+    if r.notify == nil {
+      return
+    }
+    if err == nil {
+      err = io.EOF
+    }
+    r.notify(err)
+  })
 }
 
 func (s *Server) selectMethod(hs *Handshake) (sent bool) {
