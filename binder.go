@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// Binder handles the BND requests. 
+// It has basic features, thus you need to implement a handling mechanism yourself 
+// if Binder doesn't suit your need. 
 type Binder struct {
 	// Address of the Server, without port, not to be confused with listening address.
 	// This is the address that will be sent in the first BND reply.
@@ -20,7 +23,11 @@ type Binder struct {
 	listeners map[string]*bindListener
 }
 
+// Handle handles the BND request, blocks until error or successful bind. 
+// It doesn't wait til all later transmission to finish. 
+// If restrict is true, only inbound specified in the request will be accepted. 
 func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, ddl time.Time) error {
+  // TODO damn i forgot to utilize ddl!
 	b.mux.Lock()
 	if b.listeners == nil {
 		b.listeners = make(map[string]*bindListener)
@@ -30,44 +37,26 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, ddl time.
 	}
 	b.mux.Unlock()
 
-	// Fall back to unspecified, if...laddr is unspecified.
+  var laddrIPs []net.IP
+  var port string
 	if laddr == "" {
-		laddrType := req.dst.Type
-		if laddrType == ATYPDOMAIN {
-			ips, err := net.LookupIP(string(req.dst.Bytes))
-			if err != nil {
-        req.Deny(RepGeneralFailure, "")
-				return err
-			}
-			if netip.MustParseAddr(ips[0].String()).Is4() {
-				laddrType = ATYPV4
-			} else {
-				laddrType = ATYPV6
-			}
-		} else if laddrType != ATYPV4 && laddrType != ATYPV6 {
-      req.Deny(RepAddrTypeNotSupported, "")
-			return net.UnknownNetworkError(fmt.Sprintf("0x%02X", laddrType))
-		}
+    laddrIPs = []net.IP{net.IPv4zero, net.IPv6zero}
+    port = "0"
+	} else {
+    var host string
+    var err error
+    host, port, err = net.SplitHostPort(laddr)
+    if err != nil {
+      req.Deny(RepGeneralFailure, "")
+      return err
+    }
 
-		switch laddrType {
-		case ATYPV4:
-			laddr = "0.0.0.0:0"
-		case ATYPV6:
-			laddr = "[::]:0"
-		}
-	}
-
-	host, port, err := net.SplitHostPort(laddr)
-	if err != nil {
-    req.Deny(RepGeneralFailure, "")
-		return err
-	}
-
-	laddrIPs, err := net.LookupIP(host)
-	if err != nil {
-    req.Deny(RepGeneralFailure, "")
-		return err
-	}
+    laddrIPs, err = net.LookupIP(host)
+    if err != nil {
+      req.Deny(RepGeneralFailure, "")
+      return err
+    }
+  }
 
 	sub := &bindSubscriber{
 		connChan: make(chan net.Conn),
@@ -84,12 +73,12 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, ddl time.
   _, lport, err := net.SplitHostPort(listeners[0].laddr)
   if err != nil {
     req.Deny(RepGeneralFailure, "")
-    return fmt.Errorf("socks5 bug! %w", err)
+    return fmt.Errorf("impossible bug! %w", err)
   }
   var ok bool
   if bndAddr.Port, ok = parseUint16(lport); !ok {
     req.Deny(RepGeneralFailure, "")
-    return fmt.Errorf("socks5 bug! parse %s failed", listeners[0].laddr)
+    return fmt.Errorf("impossible bug! parse %s failed", listeners[0].laddr)
   }
   
   if ok := req.Accept(bndAddr.String()); !ok {
@@ -105,13 +94,13 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, ddl time.
   }
   // Clean up
   for {
-    discard, ok := <-sub.connChan
-    if !ok {
-      break
+    select {
+    case discard := <-sub.connChan:
+      discard.Close()
+    default:
+      return nil
     }
-    discard.Close()
   }
-  return nil
 }
 
 func (b *Binder) getListeners(ips []net.IP, port string, s *bindSubscriber, justOne bool) ([]*bindListener, error) {
@@ -126,7 +115,6 @@ func (b *Binder) getListeners(ips []net.IP, port string, s *bindSubscriber, just
 		l := b.listeners[addr]
 		if l == nil {
 			l = new(bindListener)
-			l.subscribe(s)
 			if err = l.listen(addr, b); err != nil {
 				break
 			}
@@ -138,16 +126,21 @@ func (b *Binder) getListeners(ips []net.IP, port string, s *bindSubscriber, just
     }
 	}
 
-	for _, l := range newListeners {
-		if err != nil {
+  if err != nil {
+    for _, l := range newListeners {
 			l.inner.Close()
-		} else {
-			b.listeners[l.laddr] = l
-			go l.run()
-		}
-	}
-
-	return result, err
+    }
+    return nil, err
+  } else {
+    for _, l := range newListeners {
+      b.listeners[l.laddr] = l
+      go l.run()
+    }
+    for _, l := range result {
+      l.subscribe(s)
+    }
+    return result, nil
+  }
 }
 
 func (b *Binder) parseLocalAddr() {
@@ -221,12 +214,17 @@ func (bl *bindListener) run() {
 			return
 		}
 
+    sent := false
 		for _, s := range bl.subscribers {
 			if !s.restrict || s.dstAddr == conn.RemoteAddr().String() {
 				s.connChan <- conn
+        sent = true
 				break
 			}
 		}
+    if !sent {
+      conn.Close()
+    }
 	}
 }
 
@@ -236,12 +234,12 @@ func (bl *bindListener) Close() {
 	if bl.closed {
 		return
 	}
+	bl.closed = true
 
 	bl.binder.mux.Lock()
 	defer bl.binder.mux.Unlock()
 
 	delete(bl.binder.listeners, bl.laddr)
-	bl.closed = true
 
 	bl.inner.Close()
 }
