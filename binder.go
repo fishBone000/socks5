@@ -3,159 +3,191 @@ package socksy5
 import (
 	"errors"
 	"fmt"
+	"internal/goos"
 	"net"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 )
 
-// Binder handles the BND requests. 
-// It has basic features, thus you need to implement a handling mechanism yourself 
-// if Binder doesn't suit your need. 
+// Binder handles the BND requests.
+// It has basic features, thus you need to implement a handling mechanism yourself
+// if Binder doesn't suit your need.
 type Binder struct {
-	// Address of the Server, without port, not to be confused with listening address.
+	// Hostname of the Server, not to be confused with listening address.
 	// This is the address that will be sent in the first BND reply.
 	// Once parsed, changing it won't be effective.
-	LocalAddress string
-	localAddress *AddrPort
+	Hostname string
+	hostname *AddrPort //
 
 	mux       sync.Mutex
 	listeners map[string]*bindListener
 }
 
-// Handle handles the BND request, blocks until error or successful bind. 
-// It doesn't wait til all later transmission to finish. 
-// If restrict is true, only inbound specified in the request will be accepted. 
-func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, ddl time.Time) error {
-  // TODO damn i forgot to utilize ddl!
+// Handle handles the BND request, blocks until error or successful bind.
+// 
+// laddr represents the address to listen at, and it can be empty, 
+// in this case Handle will listen on all zero addresses with one single 
+// system allocated port. 
+// If laddr is a host name, 
+// Handle will resolve it to IP addresses and listen on all of them. 
+// If port in laddr is 0, 
+// Handle will try to use one single system allocated port for all of them. 
+//
+// Upon return, if req is not accepted / denied in other goroutines (don't do that),
+// req will be accepted or denied accordingly and both 2 BND replies will be sent.
+// Handle doesn't wait for all later transmission after 2nd reply to finish.
+// If restrict is true, only inbound specified in the request will be accepted.
+func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, timeout time.Duration) error {
+	cancel := make(chan struct{})
+	if timeout != 0 {
+		time.AfterFunc(timeout, func() {
+			close(cancel)
+		})
+	}
+
 	b.mux.Lock()
 	if b.listeners == nil {
 		b.listeners = make(map[string]*bindListener)
 	}
-	if b.localAddress == nil {
+	if b.hostname == nil {
 		b.parseLocalAddr()
 	}
 	b.mux.Unlock()
 
-  var laddrIPs []net.IP
-  var port string
+	var laddrIPs []net.IP
+	var port string
 	if laddr == "" {
-    laddrIPs = []net.IP{net.IPv4zero, net.IPv6zero}
-    port = "0"
+		if goos.IsDragonfly == 1 || goos.IsOpenbsd == 1 {
+			laddrIPs = []net.IP{net.IPv4zero, net.IPv6zero}
+		} else {
+			laddrIPs = []net.IP{net.IPv4zero}
+		}
+		port = "0"
 	} else {
-    var host string
-    var err error
-    host, port, err = net.SplitHostPort(laddr)
-    if err != nil {
-      req.Deny(RepGeneralFailure, "")
-      return err
-    }
+		var host string
+		var err error
+		host, port, err = net.SplitHostPort(laddr)
+		if err != nil {
+			req.Deny(RepGeneralFailure, "")
+			return err
+		}
 
-    laddrIPs, err = net.LookupIP(host)
-    if err != nil {
-      req.Deny(RepGeneralFailure, "")
-      return err
-    }
-  }
+		laddrIPs, err = net.LookupIP(host)
+		ok := true
+		select {
+		case _, ok = <-cancel:
+		default:
+		}
+		if err != nil {
+			req.Deny(RepGeneralFailure, "")
+			return err
+		}
+		if !ok {
+			req.Deny(RepGeneralFailure, "")
+			return os.ErrDeadlineExceeded
+		}
+	}
 
 	sub := &bindSubscriber{
 		connChan: make(chan net.Conn),
 		dstAddr:  req.dst.String(),
 		restrict: restrict,
 	}
-	listeners, err := b.getListeners(laddrIPs, port, sub, port=="0")
+	listeners, err := b.getListeners(laddrIPs, port, sub)
 	if err != nil {
-    req.Deny(RepGeneralFailure, "")
+		req.Deny(RepGeneralFailure, "")
 		return err
 	}
-  
-  bndAddr := b.localAddress.cpy()
-  _, lport, err := net.SplitHostPort(listeners[0].laddr)
-  if err != nil {
-    req.Deny(RepGeneralFailure, "")
-    return fmt.Errorf("impossible bug! %w", err)
-  }
-  var ok bool
-  if bndAddr.Port, ok = parseUint16(lport); !ok {
-    req.Deny(RepGeneralFailure, "")
-    return fmt.Errorf("impossible bug! parse %s failed", listeners[0].laddr)
-  }
-  
-  if ok := req.Accept(bndAddr.String()); !ok {
-    return ErrAcceptOrDenyFailed
-  }
 
-	conn := <-sub.connChan
-  if ok := req.Bind(conn); !ok {
-    return ErrAcceptOrDenyFailed
-  }
-  for _, l := range listeners {
-    l.unsubscribe(sub)
-  }
-  // Clean up
-  for {
-    select {
-    case discard := <-sub.connChan:
-      discard.Close()
-    default:
-      return nil
-    }
-  }
+	sub.listeners = listeners
+	for _, l := range listeners {
+		l.subscribe(sub)
+	}
+	defer sub.cleanup()
+
+	_, lport, err := net.SplitHostPort(listeners[0].laddr)
+	if err != nil {
+		req.Deny(RepGeneralFailure, "")
+		return fmt.Errorf("impossible bug! %w", err)
+	}
+
+	var ok bool
+	bndAddr := b.hostname.cpy()
+	if bndAddr.Port, ok = parseUint16(lport); !ok {
+		req.Deny(RepGeneralFailure, "")
+		return fmt.Errorf("impossible bug! parse %s failed", listeners[0].laddr)
+	}
+
+	if ok := req.Accept(bndAddr.String()); !ok {
+		return ErrAcceptOrDenyFailed
+	}
+
+	var conn net.Conn
+	ok = true
+	select {
+	case conn = <-sub.connChan:
+	case _, ok = <-cancel:
+	}
+	if !ok {
+		req.DenyBind(RepGeneralFailure, "")
+		return os.ErrDeadlineExceeded
+	}
+	if ok := req.Bind(conn); !ok {
+		return ErrAcceptOrDenyFailed
+	}
+	return nil
 }
 
-func (b *Binder) getListeners(ips []net.IP, port string, s *bindSubscriber, justOne bool) ([]*bindListener, error) {
+func (b *Binder) getListeners(ips []net.IP, port string, sub *bindSubscriber) ([]*bindListener, error) {
 	b.mux.Lock()
 	defer b.mux.Unlock()
 
-	newListeners := make([]*bindListener, 0)
-	result := make([]*bindListener, len(ips))
+	addrOfNewListeners := make([]net.IP, 0, 4)
+	result := make([]*bindListener, 0, len(ips))
 	var err error
-	for i, ip := range ips {
+	for _, ip := range ips {
 		addr := net.JoinHostPort(ip.String(), port)
-		l := b.listeners[addr]
-		if l == nil {
-			l = new(bindListener)
-			if err = l.listen(addr, b); err != nil {
-				break
-			}
-			newListeners = append(newListeners, l)
+		bndListener := b.listeners[addr]
+		if bndListener == nil {
+			addrOfNewListeners = append(addrOfNewListeners, ip)
 		}
-		result[i] = l
-    if justOne {
-      break
-    }
+		result = append(result, bndListener)
 	}
 
-  if err != nil {
-    for _, l := range newListeners {
-			l.inner.Close()
-    }
-    return nil, err
-  } else {
-    for _, l := range newListeners {
-      b.listeners[l.laddr] = l
-      go l.run()
-    }
-    for _, l := range result {
-      l.subscribe(s)
-    }
-    return result, nil
-  }
+	newListeners, err := listenMultipleTCP(addrOfNewListeners, port)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, l := range newListeners {
+		bndListener := &bindListener{
+			inner:  l,
+			binder: b,
+			laddr:  l.Addr().String(),
+		}
+		b.listeners[bndListener.laddr] = bndListener
+		result = append(result, bndListener)
+		go bndListener.run()
+	}
+
+	return result, nil
 }
 
 func (b *Binder) parseLocalAddr() {
-	b.localAddress = new(AddrPort)
-	if ipAddr, err := netip.ParseAddr(b.LocalAddress); err == nil {
+	b.hostname = new(AddrPort)
+	if ipAddr, err := netip.ParseAddr(b.Hostname); err == nil {
 		if ipAddr.Is4() {
-			b.localAddress.Type = ATYPV4
+			b.hostname.Type = ATYPV4
 		} else {
-			b.localAddress.Type = ATYPV6
+			b.hostname.Type = ATYPV6
 		}
 		raw, _ := ipAddr.MarshalBinary()
-		b.localAddress.Bytes = cpySlice(raw)
+		b.hostname.Bytes = cpySlice(raw)
 	} else {
-		b.localAddress.Type = ATYPDOMAIN
-		b.localAddress.Bytes = []byte(b.LocalAddress)
+		b.hostname.Type = ATYPDOMAIN
+		b.hostname.Bytes = []byte(b.Hostname)
 	}
 	return
 }
@@ -214,17 +246,20 @@ func (bl *bindListener) run() {
 			return
 		}
 
-    sent := false
+		sent := false
+		bl.mux.Lock()
 		for _, s := range bl.subscribers {
 			if !s.restrict || s.dstAddr == conn.RemoteAddr().String() {
-				s.connChan <- conn
-        sent = true
+				s.connChan <- conn // bindSubscriber.connChan shall not block
+				sent = true
 				break
 			}
 		}
-    if !sent {
-      conn.Close()
-    }
+		bl.mux.Unlock()
+
+		if !sent {
+			conn.Close()
+		}
 	}
 }
 
@@ -245,7 +280,24 @@ func (bl *bindListener) Close() {
 }
 
 type bindSubscriber struct {
-	connChan chan net.Conn
-	dstAddr  string
-	restrict bool
+	connChan  chan net.Conn // bindSubscriber.connChan shall not block
+	dstAddr   string
+	restrict  bool
+	listeners []*bindListener
+}
+
+func (bs *bindSubscriber) cleanup() {
+	for _, l := range bs.listeners {
+		l.unsubscribe(bs)
+	}
+
+Loop:
+	for {
+		select {
+		case conn := <-bs.connChan:
+			conn.Close()
+		default:
+			break Loop
+		}
+	}
 }

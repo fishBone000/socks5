@@ -19,6 +19,10 @@ import (
 // TODO test chan discarding
 // TODO test parsing from string to Addr
 
+// Is this sim test really useful? 
+// It has 900 lines of code, yet sim test bugs : Server bugs = 5 : 1
+// Plus I need to edit this each time I change any stuff in Server...
+
 const (
 	timeoutRcv    = 100 * time.Millisecond
 )

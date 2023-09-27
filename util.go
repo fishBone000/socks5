@@ -205,7 +205,42 @@ func isByteOneOf(a byte, bytes ...byte) bool {
 }
 
 func cpySlice(src []byte) (result []byte) {
-  result = make([]byte, len(src))
-  copy(result, src)
-  return
+	result = make([]byte, len(src))
+	copy(result, src)
+	return
+}
+
+func listenMultipleTCP(ips []net.IP, port string) (ls []net.Listener, err error) {
+	result := make([]net.Listener, 0, 4)
+
+  for _, ip := range ips {
+		var l net.Listener
+
+		l, err := net.Listen("tcp", net.JoinHostPort(ip.String(), port))
+		if err != nil {
+			l.Close()
+			break
+		}
+
+		if port == "0" {
+			laddr := l.Addr()
+			if laddr == nil {
+				err = &net.AddrError{Err: "listener returned nil addr", Addr: ""}
+				l.Close()
+				break
+			}
+      _, port, _ = net.SplitHostPort(laddr.String())
+		}
+
+    result = append(result, l)
+	}
+
+	if err != nil {
+		for _, l := range result {
+			l.Close()
+		}
+		return nil, err
+	}
+
+	return result, nil
 }
