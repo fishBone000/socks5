@@ -10,6 +10,9 @@ type Connector struct {
 
 // Handle handles the CONNECT request, 
 // accepting or denying it accordingly. 
+//
+// Currently if req is to be denied, only [RepGeneralFailure] 
+// will be replied. 
 func (c *Connector) Handle(req *ConnectRequest) error {
 	conn, err := net.Dial(req.Dst().Network(), req.Dst().String())
 	if err != nil {

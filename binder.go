@@ -3,10 +3,10 @@ package socksy5
 import (
 	"errors"
 	"fmt"
-	"internal/goos"
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -14,6 +14,19 @@ import (
 // Binder handles the BND requests.
 // It has basic features, thus you need to implement a handling mechanism yourself
 // if Binder doesn't suit your need.
+//
+// Binder can listen for inbounds for different requests on the same port.
+// Thus it is totally ok if you want to handle for multiple requests on one
+// fixed port. Although, please note that, if Binder is not listening for
+// any inbound on a port, the listener on that port will be closed,
+// and will only be created again when next time Binder is required to listen
+// on that port.
+//
+// The listening port registry is independent
+// across different Binders and [Server].
+//
+// Currently if req is to be denied, only [RepGeneralFailure] 
+// will be replied. 
 type Binder struct {
 	// Hostname of the Server, not to be confused with listening address.
 	// This is the address that will be sent in the first BND reply.
@@ -26,16 +39,17 @@ type Binder struct {
 }
 
 // Handle handles the BND request, blocks until error or successful bind.
+// It can be called simultainously. 
 // 
 // laddr represents the address to listen at, and it can be empty, 
 // in this case Handle will listen on all zero addresses with one single 
 // system allocated port. 
 // If laddr is a host name, 
 // Handle will resolve it to IP addresses and listen on all of them. 
-// If port in laddr is 0, 
+// If the port in laddr is 0, 
 // Handle will try to use one single system allocated port for all of them. 
 //
-// Upon return, if req is not accepted / denied in other goroutines (don't do that),
+// Upon return, if req is not accepted / denied in other goroutines, 
 // req will be accepted or denied accordingly and both 2 BND replies will be sent.
 // Handle doesn't wait for all later transmission after 2nd reply to finish.
 // If restrict is true, only inbound specified in the request will be accepted.
@@ -59,7 +73,7 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, timeout t
 	var laddrIPs []net.IP
 	var port string
 	if laddr == "" {
-		if goos.IsDragonfly == 1 || goos.IsOpenbsd == 1 {
+		if runtime.GOOS == "dragonfly" || runtime.GOOS == "openbsd" {
 			laddrIPs = []net.IP{net.IPv4zero, net.IPv6zero}
 		} else {
 			laddrIPs = []net.IP{net.IPv4zero}
