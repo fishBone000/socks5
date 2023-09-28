@@ -310,6 +310,7 @@ func (s *Server) ServeClient(conn *net.TCPConn) {
 		s.closeCloser(conn)
 		return
 	}
+  req.capper = capper
 
 	s.dbg(newOpErr("received request "+cmd2str(req.cmd), conn, nil))
 	s.dbgv(newOpErr("reply to request sent", conn, nil))

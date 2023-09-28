@@ -49,7 +49,7 @@ func FuzzReadAddr(f *testing.F) {
 				} else {
 					So(err, ShouldBeNil)
 					So(addr.Type, ShouldEqual, ATYPDOMAIN)
-					So(addr.Bytes, ShouldEqual, a[2:addrLength-2])
+					So(addr.Addr, ShouldEqual, a[2:addrLength-2])
 					So(binary.BigEndian.Uint16(a[addrLength-2:addrLength]), ShouldEqual, addr.Port)
 					So(r.n, ShouldEqual, addrLength)
 					return
@@ -69,7 +69,7 @@ func FuzzReadAddr(f *testing.F) {
 			}
 
 			So(err, ShouldBeNil)
-			So(addr.Bytes, ShouldEqual, a[1:addrLength-2])
+			So(addr.Addr, ShouldEqual, a[1:addrLength-2])
 			So(binary.BigEndian.Uint16(a[addrLength-2:addrLength]), ShouldEqual, addr.Port)
 			So(r.n, ShouldEqual, addrLength)
 

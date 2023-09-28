@@ -4,12 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"os"
 	"runtime"
 	"sync"
 	"time"
 )
+
+// TODO If zone is contained in IPv6 address, there might be prob, NEED TO CHK & FIX!
 
 // Binder handles the BND requests.
 // It has basic features, thus you need to implement a handling mechanism yourself
@@ -25,8 +26,8 @@ import (
 // The listening port registry is independent
 // across different Binders and [Server].
 //
-// Currently if req is to be denied, only [RepGeneralFailure] 
-// will be replied. 
+// Currently if req is to be denied, only [RepGeneralFailure]
+// will be replied.
 type Binder struct {
 	// Hostname of the Server, not to be confused with listening address.
 	// This is the address that will be sent in the first BND reply.
@@ -42,7 +43,7 @@ type Binder struct {
 // It can be called simultainously. 
 // 
 // laddr represents the address to listen at, and it can be empty, 
-// in this case Handle will listen on all zero addresses with one single 
+// in this case Handle will listen on 0.0.0.0 and :: with one single 
 // system allocated port. 
 // If laddr is a host name, 
 // Handle will resolve it to IP addresses and listen on all of them. 
@@ -66,7 +67,7 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, timeout t
 		b.listeners = make(map[string]*bindListener)
 	}
 	if b.hostname == nil {
-		b.parseLocalAddr()
+    b.hostname = parseHostToAddrPort(b.Hostname)
 	}
 	b.mux.Unlock()
 
@@ -129,9 +130,9 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, timeout t
 
 	var ok bool
 	bndAddr := b.hostname.cpy()
-	if bndAddr.Port, ok = parseUint16(lport); !ok {
+	if bndAddr.Port, err = parseUint16(lport); err != nil {
 		req.Deny(RepGeneralFailure, "")
-		return fmt.Errorf("impossible bug! parse %s failed", listeners[0].laddr)
+    return fmt.Errorf("impossible bug! parse %s failed: %w", listeners[0].laddr, err)
 	}
 
 	if ok := req.Accept(bndAddr.String()); !ok {
@@ -166,8 +167,9 @@ func (b *Binder) getListeners(ips []net.IP, port string, sub *bindSubscriber) ([
 		bndListener := b.listeners[addr]
 		if bndListener == nil {
 			addrOfNewListeners = append(addrOfNewListeners, ip)
-		}
-		result = append(result, bndListener)
+		} else {
+      result = append(result, bndListener)
+    }
 	}
 
 	newListeners, err := listenMultipleTCP(addrOfNewListeners, port)
@@ -190,20 +192,6 @@ func (b *Binder) getListeners(ips []net.IP, port string, sub *bindSubscriber) ([
 }
 
 func (b *Binder) parseLocalAddr() {
-	b.hostname = new(AddrPort)
-	if ipAddr, err := netip.ParseAddr(b.Hostname); err == nil {
-		if ipAddr.Is4() {
-			b.hostname.Type = ATYPV4
-		} else {
-			b.hostname.Type = ATYPV6
-		}
-		raw, _ := ipAddr.MarshalBinary()
-		b.hostname.Bytes = cpySlice(raw)
-	} else {
-		b.hostname.Type = ATYPDOMAIN
-		b.hostname.Bytes = []byte(b.Hostname)
-	}
-	return
 }
 
 type bindListener struct {

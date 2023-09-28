@@ -2,7 +2,6 @@ package socksy5
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -61,21 +60,21 @@ const (
 
 // An AddrPort stands for the address and the port
 // sent in SOCKS5 requests and replies.
-type AddrPort struct {
+type AddrPort struct { // TODO damn I forgot to utilize the Protocol field!
 	// ATYP byte value
 	Type byte
 
-	// Raw bytes, port not included.
 	// If ATYP is ATYPDOMAIN,
-	// the first byte that specifies the FQDN length is omitted.
-	Bytes []byte
+	// the first byte that specifies the FQDN length is omitted, 
+  // length of Addr represents it implicitly. 
+	Addr []byte
 	Port  uint16
 
 	// One of "tcp" and "udp", just for convenience
 	Protocol string
 }
 
-var emptyAddr = &AddrPort{Type: ATYPDOMAIN, Bytes: nil, Port: 0}
+var emptyAddr = &AddrPort{Type: ATYPDOMAIN, Addr: nil, Port: 0}
 
 func readAddrPort(reader io.Reader) (*AddrPort, error) {
 	atyp, err := readByte(reader)
@@ -106,7 +105,7 @@ func readAddrPort(reader io.Reader) (*AddrPort, error) {
 	}
 	return &AddrPort{
 		Type:  atyp,
-		Bytes: content,
+		Addr: content,
 		Port:  port,
 	}, nil
 }
@@ -120,13 +119,13 @@ func ParseAddrPort(s string) (*AddrPort, error) {
 		if err != nil {
 			return nil, err
 		}
-		port, ok := parseUint16(portS)
-		if !ok {
-			return nil, errors.New(portS + " is not port")
+		port, err := parseUint16(portS)
+		if err != nil {
+			return nil, err
 		}
 
 		a.Type = ATYPDOMAIN
-		a.Bytes = []byte(host)
+		a.Addr = []byte(host)
 		a.Port = uint16(port)
 		return a, nil
 	}
@@ -137,7 +136,7 @@ func ParseAddrPort(s string) (*AddrPort, error) {
 	} else {
 		a.Type = ATYPV6
 	}
-	a.Bytes, _ = ip.MarshalBinary()
+	a.Addr, _ = ip.MarshalBinary()
 	a.Port = ipPort.Port()
 	return a, nil
 }
@@ -161,35 +160,39 @@ func (a *AddrPort) String() string {
 	if a == nil {
 		return "<nil>"
 	}
-	var host string
-	if a.Type == ATYPV4 || a.Type == ATYPV6 {
-		if ip, ok := netip.AddrFromSlice(a.Bytes); ok {
-			return netip.AddrPortFrom(ip, a.Port).String()
-		}
-		host = net.IP(a.Bytes).String()
-	} else if a.Type == ATYPDOMAIN {
-		host = string(a.Bytes)
-	} else {
-		host = fmt.Sprintf("%02X", a.Bytes)
-	}
-	return host + ":" + strconv.Itoa(int(a.Port))
+  host := a.Host()
+  portStr := strconv.Itoa(int(a.Port))
+	return net.JoinHostPort(host, portStr)
+}
+
+func (a *AddrPort) Host() string {
+  if a == nil {
+    return "<nil>"
+  }
+  if a.Type == ATYPV4 || a.Type == ATYPV6 {
+    return net.IP(a.Addr).String()
+  }
+  if a.Type == ATYPDOMAIN {
+    return string(a.Addr)
+  }
+  return fmt.Sprintf("%02X", a.Addr)
 }
 
 // Equal tests whether a and x are the same address.
-// Both a.Protocol and x.Protocol are not compared.
+// Both a.Protocol and x.Protocol are ignored. 
 func (a *AddrPort) Equal(x *AddrPort) bool {
 	if a == x {
 		return true
 	}
 
-	return a.Type == x.Type && reflect.DeepEqual(a.Bytes, x.Bytes)
+	return a.Type == x.Type && reflect.DeepEqual(a.Addr, x.Addr) && a.Port == x.Port
 }
 
 func (a *AddrPort) cpy() *AddrPort {
 	b := new(AddrPort)
 	b.Type = a.Type
-	b.Bytes = make([]byte, len(a.Bytes))
-	copy(b.Bytes, a.Bytes)
+	b.Addr = make([]byte, len(a.Addr))
+	copy(b.Addr, a.Addr)
 	b.Port = a.Port
 	b.Protocol = a.Protocol
 	return b
@@ -200,20 +203,20 @@ func (a *AddrPort) MarshalBinary() (data []byte, err error) {
 	var l int
 
 	if a.Type == ATYPDOMAIN {
-		if len(a.Bytes) > 0xFF {
+		if len(a.Addr) > 0xFF {
 			return nil, ErrMalformed
 		}
-		l = 1 + 1 + len(a.Bytes) + 2
+		l = 1 + 1 + len(a.Addr) + 2
 		data = make([]byte, l)
 		data[1] = byte(l - 4)
-		copy(data[2:], a.Bytes)
+		copy(data[2:], a.Addr)
 	} else if a.Type == ATYPV4 || a.Type == ATYPV6 {
-		if a.Type == ATYPV4 && len(a.Bytes) != 4 || a.Type == ATYPV6 && len(a.Bytes) != 16 {
+		if a.Type == ATYPV4 && len(a.Addr) != 4 || a.Type == ATYPV6 && len(a.Addr) != 16 {
 			return nil, ErrMalformed
 		}
-		l = 1 + len(a.Bytes) + 2
+		l = 1 + len(a.Addr) + 2
 		data = make([]byte, l)
-		copy(data[1:], a.Bytes)
+		copy(data[1:], a.Addr)
 	} else {
 		return nil, ErrMalformed
 	}
@@ -341,6 +344,8 @@ type Request struct {
 	cmd byte
 	dst *AddrPort
 
+  capper Capsulator
+
 	raddr       net.Addr
 	laddr       net.Addr
 	once        *sync.Once
@@ -424,6 +429,11 @@ func (r *Request) deny(rep byte, addr *AddrPort, timeoutDeny bool) (ok bool) {
 		ok = true
 	})
 	return
+}
+
+// Capsulation returns the [Capsulator] in use. 
+func (r *Request) Capsulation() Capsulator {
+  return r.capper
 }
 
 type ConnectRequest struct {
@@ -573,32 +583,32 @@ type AssocRequest struct {
 // notify is called when the association terminates, e.g. TCP disconnection,
 // IO error.
 //
-// terminator can be used to terminate the association by closing the control
+// terminate can be used to terminate the association by closing the control
 // connection. Be aware it is nil if Accept is no-op.
 //
 // Note that [Server] doesn't actually relays the UDP traffic.
 // Implement an associator yourself, or use [Associator].
 //
 // Port 0 is valid and will be sent as-is.
-func (r *AssocRequest) Accept(addr string, notify func(reason error)) (terminator func() error) {
+func (r *AssocRequest) Accept(addr string, notify func(reason error)) (terminate func() error, ok bool) {
 	a, err := ParseAddrPort(addr)
 	if err != nil {
 		r.deny(RepGeneralFailure, emptyAddr, false)
-		return nil
+		return nil, false
 	}
 	return r.accept(a, notify)
 }
 
-func (r *AssocRequest) accept(addr *AddrPort, notify func(error)) (terminator func() error) {
-	var t func() error
+func (r *AssocRequest) accept(addr *AddrPort, notify func(error)) (terminate func() error, ok bool) {
 	r.once.Do(func() {
 		r.notify = notify
 
-		t = r.terminate
+		terminate = r.terminate
 
+    ok = true
 		r.wg.Done()
 	})
-	return t
+	return
 }
 
 type reply struct {
@@ -615,4 +625,48 @@ func (r *reply) MarshalBinary() (data []byte, err error) {
 	data[2] = RSV
 	copy(data[3:], aBytes)
 	return data, nil
+}
+
+type udpPacket struct {
+  frag byte
+  dst *AddrPort
+  data []byte
+}
+
+func (p *udpPacket) UnmarshalBinary(data []byte) error {
+  if len(data) < 3 {
+    return ErrMalformed
+  }
+  if data[0] != RSV || data[1] != RSV {
+    return ErrMalformed
+  }
+
+  r := &sliceReader{
+    bytes: data[3:],
+  }
+  dst, err := readAddrPort(r)
+  if err != nil {
+    if err == io.EOF {
+      err = ErrMalformed
+    }
+    return err
+  }
+  dst.Protocol = "udp"
+  p.dst = dst
+
+  p.data = cpySlice(data[3+r.n:])
+  p.frag = data[2]
+  return nil
+}
+
+func (p *udpPacket) MarshalBinary() ([]byte, error) {
+  addrRaw, err := p.dst.MarshalBinary()
+  if err != nil {
+    return nil, err
+  }
+  result := make([]byte, 3+len(addrRaw)+len(p.data))
+  result[2] = p.frag
+  copy(result[3:], addrRaw)
+  copy(result[3+len(addrRaw):], p.data)
+  return result, nil
 }

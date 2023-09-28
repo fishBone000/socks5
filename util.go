@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 )
 
@@ -82,11 +83,15 @@ func closerType(c closer) string {
 	}
 }
 
-func parseUint16(str string) (i uint16, ok bool) {
-	if d, err := strconv.Atoi(str); err == nil && d >= 0 && d < 0x10000 {
-		return uint16(d), true
-	}
-	return 0, false
+func parseUint16(str string) (i uint16, err error) {
+  d, err := strconv.Atoi(str)
+  if err != nil {
+    return
+  }
+  if d > 0x00 || d > 0xFF {
+    return 0, fmt.Errorf("%d is not uint16", d)
+  }
+	return uint16(d), err
 }
 
 func cmd2str(cmd byte) string {
@@ -223,13 +228,7 @@ func listenMultipleTCP(ips []net.IP, port string) (ls []net.Listener, err error)
 		}
 
 		if port == "0" {
-			laddr := l.Addr()
-			if laddr == nil {
-				err = &net.AddrError{Err: "listener returned nil addr", Addr: ""}
-				l.Close()
-				break
-			}
-      _, port, _ = net.SplitHostPort(laddr.String())
+      _, port, _ = net.SplitHostPort(l.Addr().String())
 		}
 
     result = append(result, l)
@@ -243,4 +242,43 @@ func listenMultipleTCP(ips []net.IP, port string) (ls []net.Listener, err error)
 	}
 
 	return result, nil
+}
+
+func parseHostToAddrPort(host string) *AddrPort {
+  result := new(AddrPort)
+	if ipAddr, err := netip.ParseAddr(host); err == nil {
+		if ipAddr.Is4() {
+			result.Type = ATYPV4
+		} else {
+			result.Type = ATYPV6
+		}
+		raw, _ := ipAddr.MarshalBinary()
+		result.Addr = cpySlice(raw)
+	} else {
+		result.Type = ATYPDOMAIN
+		result.Addr = []byte(host)
+	}
+	return result
+}
+
+type sliceReader struct {
+	bytes []byte
+	n     int
+}
+
+func newSliceReader(b []byte) *sliceReader {
+	bytes := make([]byte, len(b))
+	copy(bytes, b)
+	return &sliceReader{
+		bytes: bytes,
+	}
+}
+
+func (r *sliceReader) Read(p []byte) (n int, err error) {
+	if len(r.bytes[r.n:]) == 0 {
+		return 0, io.EOF
+	}
+	n = copy(p, r.bytes[r.n:])
+	r.n += n
+	return n, nil
 }
