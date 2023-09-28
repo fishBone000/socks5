@@ -9,12 +9,12 @@ import (
 // ErrMalformed is returned when request/response does not follow SOCKS5 protocol.
 var ErrMalformed = errors.New("malformed")
 
-// ErrNotStarted is returned by [Server.Close] and [Server.CloseAll] 
-// if [Server] is not up.  
+// ErrNotStarted is returned by [Server.Close] and [Server.CloseAll]
+// if [Server] is not up.
 var ErrNotStarted = errors.New("not started")
 
-// ErrAcceptOrDenyFailed is used by [Connector], [Binder] and [Associator]. 
-// It indicates the accept and deny methods of the request returned not ok. 
+// ErrAcceptOrDenyFailed is used by [Connector], [Binder] and [Associator].
+// It indicates the accept and deny methods of the request returned not ok.
 var ErrAcceptOrDenyFailed = errors.New("request already handled")
 
 // An OpError contains Op string describing in which operation has the error occured.
@@ -30,7 +30,17 @@ func newOpErr(op string, addrSrc any, err error) *OpError {
 		Op:  op,
 		Err: err,
 	}
-	e.fillAddr(addrSrc)
+	switch addrSrc := addrSrc.(type) {
+	case net.Conn:
+		e.LocalAddr = addrSrc.LocalAddr()
+		e.RemoteAddr = addrSrc.RemoteAddr()
+	case net.Listener:
+		e.LocalAddr = addrSrc.Addr()
+		e.RemoteAddr = nil
+	default:
+		e.LocalAddr = nil
+		e.RemoteAddr = nil
+	}
 	return e
 }
 
@@ -67,21 +77,6 @@ func (e *OpError) Unwrap() error {
 		return nil
 	}
 	return e.Err
-}
-
-func (e *OpError) fillAddr(a any) *OpError {
-	switch x := a.(type) {
-	case net.Conn:
-		e.LocalAddr = x.LocalAddr()
-		e.RemoteAddr = x.RemoteAddr()
-	case net.Listener:
-		e.LocalAddr = x.Addr()
-		e.RemoteAddr = nil
-	default:
-		e.LocalAddr = nil
-		e.RemoteAddr = nil
-	}
-	return e
 }
 
 type CmdNotSupportedError struct {

@@ -42,6 +42,9 @@ func (e *LogEntry) Unwrap() error {
 //
 // If e.Severity is SeverityDebug, SEVERITY is followed by a space and e.Verbosity.
 func (e *LogEntry) String() string {
+	if e == nil {
+		return "<nil>"
+	}
 	s := "["
 	s += e.Severity
 	if e.Severity == SeverityDebug {

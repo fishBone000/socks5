@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// TODO If zone is contained in IPv6 address, there might be prob, NEED TO CHK & FIX!
-
 // Binder handles the BND requests.
 // It has basic features, thus you need to implement a handling mechanism yourself
 // if Binder doesn't suit your need.
@@ -40,17 +38,17 @@ type Binder struct {
 }
 
 // Handle handles the BND request, blocks until error or successful bind.
-// It can be called simultainously. 
-// 
-// laddr represents the address to listen at, and it can be empty, 
-// in this case Handle will listen on 0.0.0.0 and :: with one single 
-// system allocated port. 
-// If laddr is a host name, 
-// Handle will resolve it to IP addresses and listen on all of them. 
-// If the port in laddr is 0, 
-// Handle will try to use one single system allocated port for all of them. 
+// It can be called simultainously.
 //
-// Upon return, if req is not accepted / denied in other goroutines, 
+// laddr represents the address to listen at, and it can be empty,
+// in this case Handle will listen on 0.0.0.0 and :: with one single
+// system allocated port.
+// If laddr is a host name,
+// Handle will resolve it to IP addresses and listen on all of them.
+// If the port in laddr is 0,
+// Handle will try to use one single system allocated port for all of them.
+//
+// Upon return, if req is not accepted / denied in other goroutines,
 // req will be accepted or denied accordingly and both 2 BND replies will be sent.
 // Handle doesn't wait for all later transmission after 2nd reply to finish.
 // If restrict is true, only inbound specified in the request will be accepted.
@@ -67,7 +65,8 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, timeout t
 		b.listeners = make(map[string]*bindListener)
 	}
 	if b.hostname == nil {
-    b.hostname = parseHostToAddrPort(b.Hostname)
+		b.hostname = parseHostToAddrPort(b.Hostname)
+		b.hostname.Protocol = "tcp"
 	}
 	b.mux.Unlock()
 
@@ -132,7 +131,7 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, timeout t
 	bndAddr := b.hostname.cpy()
 	if bndAddr.Port, err = parseUint16(lport); err != nil {
 		req.Deny(RepGeneralFailure, "")
-    return fmt.Errorf("impossible bug! parse %s failed: %w", listeners[0].laddr, err)
+		return fmt.Errorf("impossible bug! parse %s failed: %w", listeners[0].laddr, err)
 	}
 
 	if ok := req.Accept(bndAddr.String()); !ok {
@@ -168,8 +167,8 @@ func (b *Binder) getListeners(ips []net.IP, port string, sub *bindSubscriber) ([
 		if bndListener == nil {
 			addrOfNewListeners = append(addrOfNewListeners, ip)
 		} else {
-      result = append(result, bndListener)
-    }
+			result = append(result, bndListener)
+		}
 	}
 
 	newListeners, err := listenMultipleTCP(addrOfNewListeners, port)

@@ -26,20 +26,10 @@ func err(err error, a ...any) error {
 	return fmt.Errorf("%s: %w", fmt.Sprint(a...), err)
 }
 
-// TODO Replace it with io.ReadFull
-func fillBuffer(b []byte, reader io.Reader) (n int, err error) {
-	for n < len(b) && err == nil {
-		var n1 int
-		n1, err = reader.Read(b[n:])
-		n += n1
-	}
-	return
-}
-
 func readByte(reader io.Reader) (byte, error) {
 	buf := make([]byte, 1)
 
-	if _, err := fillBuffer(buf, reader); err != nil {
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		return 0, err
 	}
 	return buf[0], nil
@@ -48,7 +38,7 @@ func readByte(reader io.Reader) (byte, error) {
 func readUInt16BigEndian(reader io.Reader) (uint16, error) {
 	buf := make([]byte, 2)
 
-	if _, err := fillBuffer(buf, reader); err != nil {
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		return 0, err
 	}
 	return binary.BigEndian.Uint16(buf), nil
@@ -84,13 +74,13 @@ func closerType(c closer) string {
 }
 
 func parseUint16(str string) (i uint16, err error) {
-  d, err := strconv.Atoi(str)
-  if err != nil {
-    return
-  }
-  if d > 0x00 || d > 0xFF {
-    return 0, fmt.Errorf("%d is not uint16", d)
-  }
+	d, err := strconv.Atoi(str)
+	if err != nil {
+		return
+	}
+	if d > 0x00 || d > 0xFF {
+		return 0, fmt.Errorf("%d is not uint16", d)
+	}
 	return uint16(d), err
 }
 
@@ -218,7 +208,7 @@ func cpySlice(src []byte) (result []byte) {
 func listenMultipleTCP(ips []net.IP, port string) (ls []net.Listener, err error) {
 	result := make([]net.Listener, 0, 4)
 
-  for _, ip := range ips {
+	for _, ip := range ips {
 		var l net.Listener
 
 		l, err := net.Listen("tcp", net.JoinHostPort(ip.String(), port))
@@ -228,10 +218,10 @@ func listenMultipleTCP(ips []net.IP, port string) (ls []net.Listener, err error)
 		}
 
 		if port == "0" {
-      _, port, _ = net.SplitHostPort(l.Addr().String())
+			_, port, _ = net.SplitHostPort(l.Addr().String())
 		}
 
-    result = append(result, l)
+		result = append(result, l)
 	}
 
 	if err != nil {
@@ -245,7 +235,7 @@ func listenMultipleTCP(ips []net.IP, port string) (ls []net.Listener, err error)
 }
 
 func parseHostToAddrPort(host string) *AddrPort {
-  result := new(AddrPort)
+	result := new(AddrPort)
 	if ipAddr, err := netip.ParseAddr(host); err == nil {
 		if ipAddr.Is4() {
 			result.Type = ATYPV4

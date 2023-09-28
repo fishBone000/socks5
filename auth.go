@@ -35,8 +35,8 @@ type Capsulator interface {
 	io.ReadWriter
 
 	// Used for UDP packets. Packet is dropped if non-nil error is returned.
-	// Server doesn't actually invoke these methods, 
-  // they are here just for convenience. 
+	// Server doesn't actually invoke these methods,
+	// they are here just for convenience.
 	EncapPacket(p []byte) ([]byte, error)
 	DecapPacket(p []byte) ([]byte, error)
 }
@@ -102,17 +102,17 @@ func (n UsrPwdSubneg) Negotiate(rw io.ReadWriter) (c Capsulator, err error) {
 		return nil, err
 	}
 	uname = make([]byte, ulen)
-  if _, err := io.ReadFull(rw, uname); err != nil {
-    return nil, err
-  }
+	if _, err := io.ReadFull(rw, uname); err != nil {
+		return nil, err
+	}
 
 	if plen, err = readByte(rw); err != nil {
 		return nil, err
 	}
 	passwd = make([]byte, plen)
-  if _, err := io.ReadFull(rw, passwd); err != nil {
-    return nil, err
-  }
+	if _, err := io.ReadFull(rw, passwd); err != nil {
+		return nil, err
+	}
 
 	reply := []byte{VerUsrPwd, 0x01}
 	for _, pair := range n.List {

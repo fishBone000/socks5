@@ -10,41 +10,37 @@ import (
 
 var errDispatcherDown = errors.New("dispatcher down")
 
-// ErrAlreadyRelaying is returned by [Associator.Handle] and indicates that 
-// the [Associator] is already relaying for that client. 
+// ErrAlreadyRelaying is returned by [Associator.Handle] and indicates that
+// the [Associator] is already relaying for that client.
 var ErrAlreadyRelaying = errors.New("already relaying for that client")
 
-// Associator relays UDP packets for UDP ASSOCIATE requests. 
-// It has basic functionality, thus if it doesn't suit your need, you need 
-// to implement a relayer yourself. 
+// Associator relays UDP packets for UDP ASSOCIATE requests.
+// It has basic functionality, thus if it doesn't suit your need, you need
+// to implement a relayer yourself.
 type Associator struct {
 	// Hostname of the Server, not to be confused with listening address.
 	// This is the address that will be sent in the first BND reply.
 	// Once parsed, changing it won't be effective.
 	Hostname string
-	hostname *AddrPort
 
 	dispatchers map[string]*udpDispatcher
 
 	mux sync.RWMutex
 }
 
-// Handle handles the UDP ASSOCIATE request req. 
+// Handle handles the UDP ASSOCIATE request req.
 //
-// addr is the address that a will listen for and send UDP packets 
-// from and to client. It can be empty, in that case a will use 
-// all zero addresses with system allocated port. 
-// If the host in addr is FQDN, Handle will look it up and listen 
-// on all of the resulting IP addresses. If the port in addr is 0, 
-// a system allocated port will be chosen. Note that if FQDN is 
-// used in addr, Handle will duplicate host-to-client UDP packets 
-// and send them out using all of the IP addresses associated with 
-// the FQDN. 
+// addr is the address that a will listen for and send UDP packets
+// from and to client. It can be empty, in that case a will use
+// all zero addresses with system allocated port.
+// If the host in addr is FQDN, Handle will look it up and listen
+// on all of the resulting IP addresses. If the port in addr is 0,
+// a system allocated port will be chosen. Note that if FQDN is
+// used in addr, Handle will duplicate host-to-client UDP packets
+// and send them out using all of the IP addresses associated with
+// the FQDN.
 func (a *Associator) Handle(req *AssocRequest, addr string) error {
 	a.mux.Lock()
-	if a.hostname == nil {
-		a.hostname = parseHostToAddrPort(a.Hostname)
-	}
 	if a.dispatchers == nil {
 		a.dispatchers = make(map[string]*udpDispatcher)
 	}
@@ -65,12 +61,12 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 	rawChan := make(chan []byte, 8)
 	errChan := make(chan error)
 	for _, d := range ds {
-    existed := d.subscribe(req.Dst().String(), rawChan, errChan)
-    if existed {
-      req.Deny(RepGeneralFailure, "")
-      return ErrAlreadyRelaying
-    }
-    defer d.unsubscribe(req.Dst().String())
+		existed := d.subscribe(req.Dst().String(), rawChan, errChan)
+		if existed {
+			req.Deny(RepGeneralFailure, "")
+			return ErrAlreadyRelaying
+		}
+		defer d.unsubscribe(req.Dst().String())
 	}
 
 	_, port, err := net.SplitHostPort(ds[0].conn.LocalAddr().String())
@@ -159,7 +155,7 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 	}()
 
 	err = <-errChan
-  close(stop)
+	close(stop)
 	return nil
 }
 
@@ -210,10 +206,10 @@ func (a *Associator) getDispatchers(addr string) ([]*udpDispatcher, error) {
 		if err != nil {
 			break
 		}
-    // Here we share one single RWMutex among associator and its dispatchers. 
-    // Using different Mutexes on each dispatcher and associator can cause dead lock, 
-    // sharing one single Mutex can cause performance drop, because only 1 
-    // dispatcher can do its job at a time, thus we share 1 RWMutex. 
+		// Here we share one single RWMutex among associator and its dispatchers.
+		// Using different Mutexes on each dispatcher and associator can cause dead lock,
+		// sharing one single Mutex can cause performance drop, because only 1
+		// dispatcher can do its job at a time, thus we share 1 RWMutex.
 		d := &udpDispatcher{
 			conn:  conn,
 			assoc: a,
@@ -315,9 +311,9 @@ func (d *udpDispatcher) run() {
 		}
 
 		if err != nil {
-      d.mux.RUnlock()
-      d.mux.Lock()
-      defer d.mux.Unlock()
+			d.mux.RUnlock()
+			d.mux.Lock()
+			defer d.mux.Unlock()
 			d.closeNoLock(err)
 			return
 		}

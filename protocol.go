@@ -60,15 +60,15 @@ const (
 
 // An AddrPort stands for the address and the port
 // sent in SOCKS5 requests and replies.
-type AddrPort struct { // TODO damn I forgot to utilize the Protocol field!
+type AddrPort struct {
 	// ATYP byte value
 	Type byte
 
 	// If ATYP is ATYPDOMAIN,
-	// the first byte that specifies the FQDN length is omitted, 
-  // length of Addr represents it implicitly. 
+	// the first byte that specifies the FQDN length is omitted,
+	// length of Addr represents it implicitly.
 	Addr []byte
-	Port  uint16
+	Port uint16
 
 	// One of "tcp" and "udp", just for convenience
 	Protocol string
@@ -96,7 +96,7 @@ func readAddrPort(reader io.Reader) (*AddrPort, error) {
 	default:
 		return nil, ErrMalformed
 	}
-	if _, err := fillBuffer(content, reader); err != nil {
+	if _, err := io.ReadFull(reader, content); err != nil {
 		return nil, err
 	}
 	port, err := readUInt16BigEndian(reader)
@@ -104,9 +104,9 @@ func readAddrPort(reader io.Reader) (*AddrPort, error) {
 		return nil, err
 	}
 	return &AddrPort{
-		Type:  atyp,
+		Type: atyp,
 		Addr: content,
-		Port:  port,
+		Port: port,
 	}, nil
 }
 
@@ -160,27 +160,31 @@ func (a *AddrPort) String() string {
 	if a == nil {
 		return "<nil>"
 	}
-  host := a.Host()
-  portStr := strconv.Itoa(int(a.Port))
+	host := a.Host()
+	portStr := strconv.Itoa(int(a.Port))
 	return net.JoinHostPort(host, portStr)
 }
 
 func (a *AddrPort) Host() string {
-  if a == nil {
-    return "<nil>"
-  }
-  if a.Type == ATYPV4 || a.Type == ATYPV6 {
-    return net.IP(a.Addr).String()
-  }
-  if a.Type == ATYPDOMAIN {
-    return string(a.Addr)
-  }
-  return fmt.Sprintf("%02X", a.Addr)
+	if a == nil {
+		return "<nil>"
+	}
+	if a.Type == ATYPV4 || a.Type == ATYPV6 {
+		return net.IP(a.Addr).String()
+	}
+	if a.Type == ATYPDOMAIN {
+		return string(a.Addr)
+	}
+	return fmt.Sprintf("%02X", a.Addr)
 }
 
-// Equal tests whether a and x are the same address.
-// Both a.Protocol and x.Protocol are ignored. 
+// Equal tests whether a and x are the same address,
+// returns false if either a or x is nil.
+// Both a.Protocol and x.Protocol are ignored.
 func (a *AddrPort) Equal(x *AddrPort) bool {
+	if a == nil || x == nil {
+		return false
+	}
 	if a == x {
 		return true
 	}
@@ -262,7 +266,7 @@ func readHandshake(reader io.Reader) (*Handshake, error) {
 		return nil, err
 	}
 	hs.methods = make([]byte, hs.nmethods)
-	_, err = fillBuffer(hs.methods, reader)
+	_, err = io.ReadFull(reader, hs.methods)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +348,7 @@ type Request struct {
 	cmd byte
 	dst *AddrPort
 
-  capper Capsulator
+	capper Capsulator
 
 	raddr       net.Addr
 	laddr       net.Addr
@@ -431,9 +435,9 @@ func (r *Request) deny(rep byte, addr *AddrPort, timeoutDeny bool) (ok bool) {
 	return
 }
 
-// Capsulation returns the [Capsulator] in use. 
+// Capsulation returns the [Capsulator] in use.
 func (r *Request) Capsulation() Capsulator {
-  return r.capper
+	return r.capper
 }
 
 type ConnectRequest struct {
@@ -605,7 +609,7 @@ func (r *AssocRequest) accept(addr *AddrPort, notify func(error)) (terminate fun
 
 		terminate = r.terminate
 
-    ok = true
+		ok = true
 		r.wg.Done()
 	})
 	return
@@ -628,45 +632,45 @@ func (r *reply) MarshalBinary() (data []byte, err error) {
 }
 
 type udpPacket struct {
-  frag byte
-  dst *AddrPort
-  data []byte
+	frag byte
+	dst  *AddrPort
+	data []byte
 }
 
 func (p *udpPacket) UnmarshalBinary(data []byte) error {
-  if len(data) < 3 {
-    return ErrMalformed
-  }
-  if data[0] != RSV || data[1] != RSV {
-    return ErrMalformed
-  }
+	if len(data) < 3 {
+		return ErrMalformed
+	}
+	if data[0] != RSV || data[1] != RSV {
+		return ErrMalformed
+	}
 
-  r := &sliceReader{
-    bytes: data[3:],
-  }
-  dst, err := readAddrPort(r)
-  if err != nil {
-    if err == io.EOF {
-      err = ErrMalformed
-    }
-    return err
-  }
-  dst.Protocol = "udp"
-  p.dst = dst
+	r := &sliceReader{
+		bytes: data[3:],
+	}
+	dst, err := readAddrPort(r)
+	if err != nil {
+		if err == io.EOF {
+			err = ErrMalformed
+		}
+		return err
+	}
+	dst.Protocol = "udp"
+	p.dst = dst
 
-  p.data = cpySlice(data[3+r.n:])
-  p.frag = data[2]
-  return nil
+	p.data = cpySlice(data[3+r.n:])
+	p.frag = data[2]
+	return nil
 }
 
 func (p *udpPacket) MarshalBinary() ([]byte, error) {
-  addrRaw, err := p.dst.MarshalBinary()
-  if err != nil {
-    return nil, err
-  }
-  result := make([]byte, 3+len(addrRaw)+len(p.data))
-  result[2] = p.frag
-  copy(result[3:], addrRaw)
-  copy(result[3+len(addrRaw):], p.data)
-  return result, nil
+	addrRaw, err := p.dst.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]byte, 3+len(addrRaw)+len(p.data))
+	result[2] = p.frag
+	copy(result[3:], addrRaw)
+	copy(result[3+len(addrRaw):], p.data)
+	return result, nil
 }

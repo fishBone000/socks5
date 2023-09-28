@@ -45,45 +45,43 @@ type Server struct {
 	closers     map[closer]struct{}
 }
 
-// TODO Check nil receivers
-
-// Serve starts the Server and blocks until any error occured or closed by 
-// [Server.Close] or [Server.CloseAll]. 
-// No-op and no blocking if it has been started. 
+// Serve starts the Server and blocks until any error occured or closed by
+// [Server.Close] or [Server.CloseAll].
+// No-op and no blocking if it has been started.
 //
 // [Server.ServeClient] can be invoked without starting the server
 // if you want to handle listening yourself.
 func (s *Server) Serve(addr string) (err error) {
-  s.mux.Lock()
+	s.mux.Lock()
 	if s.up {
-    s.mux.Unlock()
+		s.mux.Unlock()
 		return nil
 	}
-  s.mux.Unlock()
+	s.mux.Unlock()
 
-  var tcpAddr *net.TCPAddr
+	var tcpAddr *net.TCPAddr
 	if tcpAddr, err = net.ResolveTCPAddr("tcp", addr); err != nil {
 		return
 	}
 
-  s.mux.Lock()
+	s.mux.Lock()
 	if s.listener, err = net.ListenTCP(tcpAddr.Network(), tcpAddr); err != nil {
-    s.listener = nil
-    s.mux.Unlock()
+		s.listener = nil
+		s.mux.Unlock()
 		return
 	}
 	s.up = true
 
-  if s.closers == nil {
-    s.closers = make(map[closer]struct{})
-  }
+	if s.closers == nil {
+		s.closers = make(map[closer]struct{})
+	}
 	s.regCloserNoLock(s.listener)
-  s.mux.Unlock()
+	s.mux.Unlock()
 
 	s.info(newOpErr("start server", s.listener, nil))
 
 	for {
-    var conn *net.TCPConn
+		var conn *net.TCPConn
 		conn, err = s.listener.AcceptTCP()
 		if err != nil {
 			s.mux.Lock()
@@ -103,7 +101,7 @@ func (s *Server) Serve(addr string) (err error) {
 	}
 }
 
-// Running reports whether s is listening. 
+// Running reports whether s is listening.
 func (s *Server) Running() bool {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -111,17 +109,17 @@ func (s *Server) Running() bool {
 }
 
 func (s *Server) Addr() net.Addr {
-  s.mux.Lock()
-  defer s.mux.Unlock()
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	if s.listener == nil {
 		return nil
 	}
 	return s.listener.Addr()
 }
 
-// Close closes the internal listener. It's useful if you want to stop the [Server], 
-// while wait for all remaining sessions to finish. 
-// Returns [ErrNotStarted] if s is not started. 
+// Close closes the internal listener. It's useful if you want to stop the [Server],
+// while wait for all remaining sessions to finish.
+// Returns [ErrNotStarted] if s is not started.
 // Connections established are not closed.
 func (s *Server) Close() (err error) {
 	s.mux.Lock()
@@ -135,46 +133,46 @@ func (s *Server) Close() (err error) {
 		s.warn(newOpErr("close listener", s.listener, err))
 	}
 	s.delCloserNoLock(s.listener)
-  return
+	return
 }
 
-// CloseAll closes the internal listener and all established connections. 
-// It's useful if you want to stop the [Server] and kill all sessions. 
+// CloseAll closes the internal listener and all established connections.
+// It's useful if you want to stop the [Server] and kill all sessions.
 //
-// If s is not started, CloseAll closes established connections only. 
+// If s is not started, CloseAll closes established connections only.
 // If a connection or listener has failed to close,
 // the [Server] won't try to close it next time.
-func (s *Server) CloseAll() (errs []error){
+func (s *Server) CloseAll() (errs []error) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.up = false
 	s.info(newOpErr("server shut down", nil, nil))
 	for c := range s.closers {
 		s.info(newOpErr("close "+closerType(c), c, nil))
-		
+
 		if err := c.Close(); err != nil {
-      errs = append(errs, err)
+			errs = append(errs, err)
 			s.warn(err, newOpErr("close "+closerType(c), c, err))
 		}
 		s.delCloserNoLock(c)
 	}
-  return
+	return
 }
 
 func (s *Server) regCloser(c closer) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-  if s.closers == nil {
-    s.closers = map[closer]struct{}{}
-  }
+	if s.closers == nil {
+		s.closers = map[closer]struct{}{}
+	}
 	s.closers[c] = struct{}{}
 	s.dbgvv(newOpErr("reg closer", c, nil))
 }
 
 func (s *Server) regCloserNoLock(c closer) {
-  if s.closers == nil {
-    s.closers = map[closer]struct{}{}
-  }
+	if s.closers == nil {
+		s.closers = map[closer]struct{}{}
+	}
 	s.closers[c] = struct{}{}
 	s.dbgvv(newOpErr("reg closer without locking", c, nil))
 }
@@ -310,7 +308,7 @@ func (s *Server) ServeClient(conn *net.TCPConn) {
 		s.closeCloser(conn)
 		return
 	}
-  req.capper = capper
+	req.capper = capper
 
 	s.dbg(newOpErr("received request "+cmd2str(req.cmd), conn, nil))
 	s.dbgv(newOpErr("reply to request sent", conn, nil))
@@ -327,6 +325,7 @@ func (s *Server) ServeClient(conn *net.TCPConn) {
 		}
 		wrappedReq = cr
 		req = &cr.Request
+		req.dst.Protocol = "tcp"
 	case CmdBIND:
 		br := &BindRequest{
 			Request: *req,
@@ -335,6 +334,7 @@ func (s *Server) ServeClient(conn *net.TCPConn) {
 		br.bindWg.Add(1)
 		wrappedReq = br
 		req = &br.Request
+		req.dst.Protocol = "tcp"
 	case CmdASSOC:
 		ar := &AssocRequest{
 			Request: *req,
@@ -350,6 +350,7 @@ func (s *Server) ServeClient(conn *net.TCPConn) {
 		ar.terminate = terminator
 		wrappedReq = ar
 		req = &ar.Request
+		req.dst.Protocol = "udp"
 	default:
 		s.warn(newOpErr("serve", conn, &CmdNotSupportedError{Cmd: req.cmd}))
 	}
@@ -462,19 +463,19 @@ func (s *Server) handleAssoc(r *AssocRequest, conn net.Conn) {
 			r.terminate()
 			s.closeCloser(conn)
 		})
-    return
+		return
 	}
 
-  _, err := io.Copy(io.Discard, conn)
-  r.notifyOnce.Do(func() {
-    if r.notify == nil {
-      return
-    }
-    if err == nil {
-      err = io.EOF
-    }
-    r.notify(err)
-  })
+	_, err := io.Copy(io.Discard, conn)
+	r.notifyOnce.Do(func() {
+		if r.notify == nil {
+			return
+		}
+		if err == nil {
+			err = io.EOF
+		}
+		r.notify(err)
+	})
 }
 
 func (s *Server) selectMethod(hs *Handshake) (sent bool) {
