@@ -30,4 +30,7 @@ For details, see the Go reference.
 
 ## Note
 - Issues, suggestions and PRs welcome
-- Way much less maintainance after September 2023
+- I will be busy for a quite long time, expect less maintanence. 
+- The error and log util of the MidLayer might be...a little poorly designed. 
+Post issue if you think changes are necessary. 
+- Socksy5 is my first public library, it is tested, but there might still be some bugs. 

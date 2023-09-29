@@ -56,7 +56,7 @@ func (e *LogEntry) String() string {
 	return s
 }
 
-func (s *Server) sendLog(l LogEntry) {
+func (s *MidLayer) sendLog(l LogEntry) {
 	if s.logChan == nil {
 		return
 	}
@@ -66,7 +66,7 @@ func (s *Server) sendLog(l LogEntry) {
 	}
 }
 
-func (s *Server) dbg(e error, a ...any) {
+func (s *MidLayer) dbg(e error, a ...any) {
 	log := LogEntry{
 		Time:     time.Now(),
 		Severity: SeverityDebug,
@@ -75,7 +75,7 @@ func (s *Server) dbg(e error, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) dbgv(e error, a ...any) {
+func (s *MidLayer) dbgv(e error, a ...any) {
 	log := LogEntry{
 		Time:      time.Now(),
 		Severity:  SeverityDebug,
@@ -85,7 +85,7 @@ func (s *Server) dbgv(e error, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) dbgvv(e error, a ...any) {
+func (s *MidLayer) dbgvv(e error, a ...any) {
 	log := LogEntry{
 		Time:      time.Now(),
 		Severity:  SeverityDebug,
@@ -95,13 +95,13 @@ func (s *Server) dbgvv(e error, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) dbgNonNil(e error, a ...any) {
+func (s *MidLayer) dbgNonNil(e error, a ...any) {
 	if e != nil {
 		s.dbg(e, a...)
 	}
 }
 
-func (s *Server) info(e error, a ...any) {
+func (s *MidLayer) info(e error, a ...any) {
 	log := LogEntry{
 		Time:     time.Now(),
 		Severity: SeverityInfo,
@@ -110,13 +110,13 @@ func (s *Server) info(e error, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) infoNonNil(e error, a ...any) {
+func (s *MidLayer) infoNonNil(e error, a ...any) {
 	if e != nil {
 		s.info(e, a...)
 	}
 }
 
-func (s *Server) warn(e error, a ...any) {
+func (s *MidLayer) warn(e error, a ...any) {
 	log := LogEntry{
 		Time:     time.Now(),
 		Severity: SeverityWarning,
@@ -125,13 +125,13 @@ func (s *Server) warn(e error, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) warnNonNil(e error, a ...any) {
+func (s *MidLayer) warnNonNil(e error, a ...any) {
 	if e != nil {
 		s.warn(e, a...)
 	}
 }
 
-func (s *Server) err(e error, a ...any) {
+func (s *MidLayer) err(e error, a ...any) {
 	log := LogEntry{
 		Time:     time.Now(),
 		Severity: SeverityError,
@@ -140,7 +140,7 @@ func (s *Server) err(e error, a ...any) {
 	s.sendLog(log)
 }
 
-func (s *Server) errNonNil(e error, a ...any) {
+func (s *MidLayer) errNonNil(e error, a ...any) {
 	if e != nil {
 		s.err(e, a...)
 	}

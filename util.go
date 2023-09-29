@@ -163,7 +163,7 @@ func relay2str(cConn net.Conn, hConn net.Conn) string {
 	)
 }
 
-func copyClose(s *Server, r io.ReadCloser, w io.WriteCloser) {
+func copyClose(s *MidLayer, r io.ReadCloser, w io.WriteCloser) {
 	io.Copy(w, r)
 	s.closeCloser(r)
 	s.closeCloser(w)
