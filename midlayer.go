@@ -1,9 +1,9 @@
 // # Description
 // 
-// Package socksy5 provides a SOCKS5 middle layer and utils for request handling. 
+// Package socksy5 provides a SOCKS5 middle layer 
+// and utils for easy request handling. 
 // [MidLayer] implements the middle layer, which accepts client connections 
-// in the form of [net.Conn] (see [Server.ServeClient]), 
-// or listens for client connections itself, 
+// in the form of [net.Conn] (see [MidLayer.ServeClient]), 
 // then wraps client handshakes and requests as structs, 
 // letting external code to decide whether accept or reject, which kind of 
 // subnegotiation to use e.t.c.. 
@@ -12,22 +12,24 @@
 // processing, custom subnegotiation and encryption, attaching special 
 // connection to CONNECT requests. 
 //
-// Besides that, socksy5 also provides [Connector], [Binder] and [Associator] 
+// Besides that, socksy5 also provides [Connect], [Binder] and [Associator] 
 // as simple handlers for CONNECT, BND and UDP ASSOC requests. 
+// [Listen] is also provided as a simple listening util which passes [net.Conn] 
+// to [MidLayer] automatically. 
 // They are for ease of use if you want to set up a SOCKS5 server fast, thus 
 // only have basic features. You can handle handshakes and requests yourself 
 // if they don't meet your requirement. 
 //
 // # How to use
 //
-// First start up [MidLayer], or pass a [net.Conn] to a [MidLayer] instance, 
+// First pass a [net.Conn] to a [MidLayer] instance, 
 // then [MidLayer] will begin communicating with the client. 
 // When client begins handshakes or sends requests, [MidLayer] will emit 
 // [Handshake], [ConnectRequest], [BindRequest] and [AssocRequest] via channels. 
 // Invoke methods of them to decide which kind of authentication to use, 
 // whether accept or reject and so on. 
 // Logs are emitted via channels too. 
-// See [Server.LogChan], [Server.HandshakeChan], [Server.RequestChan]. 
+// See [MidLayer.LogChan], [MidLayer.HandshakeChan], [MidLayer.RequestChan]. 
 //
 // # Limitations
 //
@@ -49,7 +51,7 @@ import (
 
 // Constants for server policy.
 const (
-	// Channel capacity of all channels returned by Server's channel methods.
+	// Channel capacity of all channels returned by MidLayer's channel methods.
 	ChanCap = 64
 	// Time to close connection if auth failed, request denied, e.t.c..
 	PeriodClose    = time.Second * time.Duration(3)
@@ -178,7 +180,7 @@ func (s *MidLayer) listen() {
 // ServeClient can be invoked without s being started,
 // this is useful if inbound connection listening need to be handled explicitly.
 //
-// Note that [Server.Close] and [Server.CloseAll] will still try to close
+// Note that [MidLayer.Close] and [MidLayer.CloseAll] will still try to close
 // connections created during serving, even if the server is not started.
 func (s *MidLayer) ServeClient(conn net.Conn) { // TODO Check compability with net.Conn (nil addr etc)
   s.info(newOpErr("new connection", conn, nil))
