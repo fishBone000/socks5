@@ -9,10 +9,6 @@ import (
 	"strconv"
 )
 
-type closer interface {
-	Close() error
-}
-
 func err(err error, a ...any) error {
 	if err == nil && len(a) == 0 {
 		return nil
@@ -60,17 +56,6 @@ func conn2str(conn net.Conn) string {
 		s += raddr.String()
 	}
 	return s
-}
-
-func closerType(c closer) string {
-	switch c := c.(type) {
-	case net.Listener:
-		return fmt.Sprintf("listener")
-	case net.Conn:
-		return fmt.Sprintf("connection")
-	default:
-		return fmt.Sprintf("%T", c)
-	}
 }
 
 func parseUint16(str string) (i uint16, err error) {
@@ -161,12 +146,6 @@ func relay2str(cConn net.Conn, hConn net.Conn) string {
 		cConn.RemoteAddr(), cConn.LocalAddr(),
 		hConn.LocalAddr(), hConn.RemoteAddr(),
 	)
-}
-
-func copyClose(s *MidLayer, r io.ReadCloser, w io.WriteCloser) {
-	io.Copy(w, r)
-	s.closeCloser(r)
-	s.closeCloser(w)
 }
 
 func mapIp2Tcp(ip string) string {

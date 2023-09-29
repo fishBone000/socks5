@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 const VerSOCKS5 byte = 0x05 // SOCKS5 VER byte
@@ -141,6 +143,11 @@ func ParseAddrPort(s string) (*AddrPort, error) {
 	return a, nil
 }
 
+// Network returns the network of a.
+// If a.Type is one of [ATYPV4] or [ATYPV6],
+// Network will append "4" or "6" to a.Protocol accordingly.
+// If a.Type is [ATYPDOMAIN], Network will just return a.Protocol.
+// Otherwise, Network returns the hex of a.Type.
 func (a *AddrPort) Network() string {
 	if a == nil {
 		return "<nil>"
@@ -230,8 +237,9 @@ func (a *AddrPort) MarshalBinary() (data []byte, err error) {
 	return
 }
 
-// A Handshake represents the handshake message the client sends after connecting to
-// the server.
+// A Handshake represents the version identifier/method selection message.
+// The message is called handshake in this entire module because...its full name
+// is just too long.
 // Handshake will be denied automatically if it's not accepted or denied
 // after [PeriodAutoDeny].
 type Handshake struct {
@@ -241,6 +249,7 @@ type Handshake struct {
 	methodChosen byte
 	laddr        net.Addr
 	raddr        net.Addr
+	uuid         uuid.UUID
 
 	wg          *sync.WaitGroup
 	once        *sync.Once
@@ -333,6 +342,15 @@ func (r *Handshake) RemoteAddr() net.Addr {
 	return r.raddr
 }
 
+// UUID returns the UUID of the session of hs.
+// As soon as the [MidLayer] read the handshake message, the connection is
+// considered as a valid session and is bound with a UUID.
+// You can use the UUID to tell which handshake and which request belongs to
+// which connection.
+func (hs *Handshake) UUID() uuid.UUID {
+	return hs.uuid
+}
+
 // A Request represents a client request.
 // Use [ConnectRequest] e.t.c. for manipulation.
 //
@@ -349,6 +367,7 @@ type Request struct {
 	dst *AddrPort
 
 	capper Capsulator
+	uuid   uuid.UUID
 
 	raddr       net.Addr
 	laddr       net.Addr
@@ -440,9 +459,18 @@ func (r *Request) Capsulation() Capsulator {
 	return r.capper
 }
 
+// UUID returns the UUID of the session of r.
+// As soon as the [MidLayer] read the handshake message, the connection is
+// considered as a valid session and is bound with a UUID.
+// You can use the UUID to tell which handshake and which request belongs to
+// which connection.
+func (r *Request) UUID() uuid.UUID {
+	return r.uuid
+}
+
 type ConnectRequest struct {
 	Request
-	conn net.Conn
+	outbound net.Conn
 }
 
 // Accept accepts the request, and starts proxying.
@@ -462,7 +490,7 @@ func (r *ConnectRequest) Accept(conn net.Conn) (ok bool) {
 
 func (r *ConnectRequest) accept(conn net.Conn, addr *AddrPort) (ok bool) {
 	r.once.Do(func() {
-		r.conn = conn
+		r.outbound = conn
 		r.reply.addr = addr
 		r.wg.Done()
 		ok = true
@@ -472,7 +500,7 @@ func (r *ConnectRequest) accept(conn net.Conn, addr *AddrPort) (ok bool) {
 
 type BindRequest struct {
 	Request
-	conn            net.Conn
+	hostConn        net.Conn
 	bindMux         sync.Mutex // To avoid simultainous rw on reply field, Bind uses it to check if the request is accepted.
 	bindWg          sync.WaitGroup
 	bindOnce        sync.Once
@@ -533,7 +561,7 @@ func (r *BindRequest) Bind(conn net.Conn) (ok bool) {
 
 func (r *BindRequest) bind(conn net.Conn, addr *AddrPort) (ok bool) {
 	r.bindOnce.Do(func() {
-		r.conn = conn
+		r.hostConn = conn
 		r.bindReply = new(reply)
 		r.bindReply.addr = addr
 		ok = true
@@ -620,6 +648,7 @@ type reply struct {
 	addr *AddrPort
 }
 
+// Guarantees to return nil error.
 func (r *reply) MarshalBinary() (data []byte, err error) {
 	aBytes, _ := r.addr.MarshalBinary()
 	l := 1 + 1 + 1 + len(aBytes)

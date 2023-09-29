@@ -24,6 +24,7 @@ var ErrAuthFailed = errors.New("auth failed")
 // Connection is closed if non-nil error is returned.
 type Subnegotiator interface {
 	Negotiate(io.ReadWriter) (Capsulator, error)
+	Type() string
 }
 
 // Capsulator does encapsulation and decapsulation as corresponding auth method
@@ -49,6 +50,10 @@ func (n NoAuthSubneg) Negotiate(rw io.ReadWriter) (Capsulator, error) {
 	return NoCap{
 		rw: rw,
 	}, nil
+}
+
+func (n NoAuthSubneg) Type() string {
+	return "NO AUTHENTICATION"
 }
 
 // NoCap is a [Capsulator] that doesn't encauplate/decapsulate at all.
@@ -132,4 +137,8 @@ func (n UsrPwdSubneg) Negotiate(rw io.ReadWriter) (c Capsulator, err error) {
 		return nil, ErrAuthFailed
 	}
 	return NoCap{}, nil
+}
+
+func (n UsrPwdSubneg) Type() string {
+	return "USERNAME/PASSWORD"
 }

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+
+	"github.com/google/uuid"
 )
 
 // ErrMalformed is returned when request/response does not follow SOCKS5 protocol.
