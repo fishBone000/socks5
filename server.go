@@ -1,14 +1,41 @@
-// Package socksy5 provides a SOCKS5 server that reads and sends SOCKS5 messages,
-// act like a proxy when outbound connection is attached,
-// but leaves handshake and  request decisions, outbound dialing,
-// UDP relaying, subnegotiation e.t.c. to external code.
+// # Description
+// 
+// Package socksy5 provides a SOCKS5 middle layer and utils for request handling. 
+// [Server] implements the middle layer, which accepts client connections 
+// in the form of [net.Conn] (see [Server.ServeClient]), 
+// or listens for client connections itself, 
+// then wraps client handshakes and requests as structs, 
+// letting external code to decide whether accept or reject, which kind of 
+// subnegotiation to use e.t.c.. 
 //
 // This provides advantages when you need multi-homed BND or UDP ASSOCIATION
-// processing, custom subnegotiation and encryption, attach special connection to
-// CONNECT requests e.t.c..
+// processing, custom subnegotiation and encryption, attaching special 
+// connection to CONNECT requests. 
 //
-// All methods in this package, except for the methods of [Addr], are safe
-// to call simultanously.
+// Besides that, socksy5 also provides [Connector], [Binder] and [Associator] 
+// as simple handlers for CONNECT, BND and UDP ASSOC requests. 
+// They are for ease of use if you want to set up a SOCKS5 server fast, thus 
+// only have basic features. You can handle handshakes and requests yourself 
+// if they don't meet your requirement. 
+//
+// # How to use
+//
+// First start up [Server], or pass a [net.Conn] to a [Server] instance, 
+// then [Server] will begin communicating with the client. 
+// When client begins handshakes or sends requests, [Server] will emit 
+// [Handshake], [ConnectRequest], [BindRequest] and [AssocRequest] via channels. 
+// Invoke methods of them to decide which kind of authentication to use, 
+// whether accept or reject and so on. 
+// Logs are emitted via channels too. 
+// See [Server.LogChan], [Server.HandshakeChan], [Server.RequestChan]. 
+//
+// # Limitations
+//
+// [Server] is just a middle layer. It doesn't dial outbound connections, 
+// relay TCP connection for BIND requests, nor relay UDP packets. 
+//
+// Also, socksy5 provides limited implementations of authenticate methods, 
+// for quite a long time. 
 package socksy5
 
 import (
@@ -22,19 +49,17 @@ import (
 
 // Constants for server policy.
 const (
-	// Channel capacity of all channels returned by Server's channel functions.
+	// Channel capacity of all channels returned by Server's channel methods.
 	ChanCap = 64
 	// Time to close connection if auth failed, request denied, e.t.c..
 	PeriodClose    = time.Second * time.Duration(3)
+  // Time to wait for external code to react to handshakes and requests. 
 	PeriodAutoDeny = time.Second * time.Duration(30)
 )
 
-// A Server is a SOCKS5 server interface.
+// A Server is a SOCKS5 middle layer. See package description for detail. 
 //
-// Use channel funcs (e.g. [Server.HandshakeChan]) to deal with logging, requests e.t.c..
-// All channel funcs create a corresponding channel if not ever created.
-// If no channel is created or channel is full, corresponding log entries are
-// discarded, handshakes, or requests are denied.
+// Use channel methods (e.g. [Server.HandshakeChan]) to deal with logging, requests e.t.c..
 type Server struct {
 	listener    *net.TCPListener
 	mux         sync.Mutex
@@ -49,9 +74,9 @@ type Server struct {
 // [Server.Close] or [Server.CloseAll].
 // No-op and no blocking if it has been started.
 //
-// [Server.ServeClient] can be invoked without starting the server
-// if you want to handle listening yourself.
-func (s *Server) Serve(addr string) (err error) {
+// Clients can be served via invoking [Server.ServeClient] without starting 
+// the server, if you want to handle listening yourself.
+func (s *Server) Serve(addr string) (err error) { // TODO let server listen on multiple addresses. 
 	s.mux.Lock()
 	if s.up {
 		s.mux.Unlock()
@@ -202,6 +227,9 @@ func (s *Server) closeCloser(c closer) error {
 	return err
 }
 
+// All channel methods create a corresponding channel if not ever created.
+// If no channel is created or the channel is full, corresponding log entries are
+// discarded. 
 func (s *Server) LogChan() <-chan LogEntry {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -211,6 +239,9 @@ func (s *Server) LogChan() <-chan LogEntry {
 	return (<-chan LogEntry)(s.logChan)
 }
 
+// All channel methods create a corresponding channel if not ever created.
+// If no channel is created or the channel is full, corresponding handshakes are
+// rejected by closing connection, instead of sending a reply. 
 func (s *Server) HandshakeChan() <-chan *Handshake {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -221,7 +252,11 @@ func (s *Server) HandshakeChan() <-chan *Handshake {
 }
 
 // RequestChan is guaranteed to return a channel that receives one of
-// [*ConnectRequest], [*BindRequest] and [*AssocRequest].
+// types [*ConnectRequest], [*BindRequest] and [*AssocRequest].
+//
+// All channel methods create a corresponding channel if not ever created.
+// If no channel is created or the channel is full, corresponding requests are
+// rejected with [RepGeneralFailure]. 
 func (s *Server) RequestChan() <-chan any {
 	s.mux.Lock()
 	defer s.mux.Unlock()
