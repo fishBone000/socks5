@@ -478,28 +478,27 @@ func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) {
 	}()
 	wg.Wait()
 
-	if chErr == nil && errors.Is(hcErr, net.ErrClosed) {
-		msg := fmt.Sprintf("relay client %s and host %s: client EOF", clientConn.RemoteAddr(), hostConn.RemoteAddr())
-		ml.info(newOpErr(msg, nil, nil))
-		ml.delConn(clientConn)
-		ml.closeConn(hostConn)
-	} else if hcErr == nil && errors.Is(chErr, net.ErrClosed) {
-		msg := fmt.Sprintf("relay client %s and host %s: host EOF", clientConn.RemoteAddr(), hostConn.RemoteAddr())
-		ml.info(newOpErr(msg, nil, nil))
-		ml.delConn(hostConn)
-		ml.closeConn(clientConn)
-	} else {
-		if chErr == nil {
-			chErr = io.EOF
-		}
-		if hcErr == nil {
-			hcErr = io.EOF
-		}
-		msg := fmt.Sprintf("relay from client %s to host %s", clientConn.RemoteAddr(), hostConn.RemoteAddr())
-		ml.err(newOpErr(msg, nil, chErr))
-		msg = fmt.Sprintf("relay from host %s to client %s", hostConn.RemoteAddr(), clientConn.RemoteAddr())
-		ml.err(newOpErr(msg, nil, hcErr))
-		ml.closeConn(clientConn)
-		ml.closeConn(hostConn)
-	}
+  if chErr == nil {
+    chErr = io.EOF
+  }
+  if hcErr == nil {
+    hcErr = io.EOF
+  }
+
+  msg := fmt.Sprintf("relay from client %s to host %s", clientConn.RemoteAddr(), hostConn.RemoteAddr())
+  if chErr == io.EOF {
+    ml.info(newOpErr(msg, nil, chErr))
+  } else {
+    ml.err(newOpErr(msg, nil, chErr))
+  }
+
+  msg = fmt.Sprintf("relay from host %s to client %s", hostConn.RemoteAddr(), clientConn.RemoteAddr())
+  if hcErr == io.EOF {
+    ml.info(newOpErr(msg, nil, hcErr))
+  } else {
+    ml.err(newOpErr(msg, nil, hcErr))
+  }
+
+  ml.closeConn(clientConn)
+  ml.closeConn(hostConn)
 }

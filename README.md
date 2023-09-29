@@ -35,4 +35,4 @@ For details, see the Go reference.
 - I will be busy for quite a long time, expect less maintanence. 
 - The error and log util of the MidLayer might be...a little poorly designed. 
 Post issue if you think changes are necessary. 
-- Socksy5 is my first public library, it is tested, but there might still be some bugs. 
+- Socksy5 is my first public library, it is (not yet) tested, but there might still be some bugs. 
