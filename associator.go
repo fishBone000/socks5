@@ -17,10 +17,14 @@ var ErrAlreadyRelaying = errors.New("already relaying for that client")
 // Associator relays UDP packets for UDP ASSOCIATE requests.
 // It has basic functionality, thus if it doesn't suit your need, you need
 // to implement a relayer yourself.
+//
+// All methods of Associator can be called simultaneously.
 type Associator struct {
-	// Hostname of the Server, not to be confused with listening address.
+	// Hostname of the server, not to be confused with listening address.
 	// This is the address that will be sent in the first BND reply.
-	// Once parsed, changing it won't be effective.
+	// RFC 1928 states that addresses in replies to UDP ASSOCIATE requests
+	// shall be IP addresses, but a host name is considered valid here.
+	// Do not modify this field when Associator is running.
 	Hostname string
 
 	dispatchers map[string]*udpDispatcher

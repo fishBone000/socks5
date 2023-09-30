@@ -30,15 +30,15 @@
 // whether accept or reject and so on.
 // Logs are emitted via channels too.
 // See [MidLayer.LogChan], [MidLayer.HandshakeChan], [MidLayer.RequestChan].
-// User of this package should read [Request], as it contains general info about 
-// different types of requests. 
+// User of this package should read [Request], as it contains general info about
+// different types of requests.
 //
 // # Note
 //
 // socksy5 provides limited implementations of authenticate methods,
 // for quite a long time.
 // [MidLayer] does relay TCP traffic, but it doesn't dial outbound or
-// relay UDP traffic. 
+// relay UDP traffic.
 package socksy5
 
 import (
@@ -63,6 +63,8 @@ const (
 )
 
 // A MidLayer is a SOCKS5 middle layer. See package description for detail.
+//
+// All methods of MidLayer can be called simultaineously.
 type MidLayer struct {
 	mux         sync.Mutex
 	logChan     chan LogEntry

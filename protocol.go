@@ -252,6 +252,8 @@ func (a *AddrPort) MarshalBinary() (data []byte, err error) {
 // is just too long.
 // Handshake will be denied automatically if it's not accepted or denied
 // after [PeriodAutoDeny].
+//
+// All methods of Handshake can be called simultainously.
 type Handshake struct {
 	ver          byte
 	nmethods     byte
@@ -375,6 +377,8 @@ func (hs *Handshake) UUID() uuid.UUID {
 // A Request will be denied automatically if it's not accepted or denied
 // after [PeriodAutoDeny], with exception being [BindRequest], see
 // [BindRequest.Bind].
+//
+// All methods of all request types can be called simultainously.
 type Request struct {
 	cmd byte
 	dst *AddrPort
@@ -616,9 +620,9 @@ type AssocRequest struct {
 	notifyOnce sync.Once
 	notify     func(error)
 	terminate  func() error
-  // The true reason why the association is terminated. 
-  // See Midlayer.handleAssoc and AssocRequest.Accept. 
-	finalErr   error 
+	// The true reason why the association is terminated.
+	// See Midlayer.handleAssoc and AssocRequest.Accept.
+	finalErr error
 }
 
 // Accept accepts the request.

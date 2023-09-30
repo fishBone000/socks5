@@ -6,32 +6,32 @@ import (
 	"net"
 )
 
-// ErrMalformed represents protocol format violation. 
-// Usually a more specific error type is used, see: 
-// [VerIncorrectError], [RsvViolationError], [CmdNotSupportedError] 
-// and [ATYPNotSupportedError]. 
+// ErrMalformed represents protocol format violation.
+// Usually a more specific error type is used, see:
+// [VerIncorrectError], [RsvViolationError], [CmdNotSupportedError],
+// [ATYPNotSupportedError] and [UsrPwdVerIncorrectErr].
 var ErrMalformed = errors.New("malformed")
 
 type VerIncorrectError byte
 
 func (e VerIncorrectError) Error() string {
-  return fmt.Sprintf("VER incorrect (0x%02X)", byte(e))
+	return fmt.Sprintf("VER incorrect (0x%02X)", byte(e))
 }
 
 // Is returns true if target is [ErrMalformed].
 func (e VerIncorrectError) Is(target error) bool {
-  return target == ErrMalformed
+	return target == ErrMalformed
 }
 
 type RsvViolationError byte
 
 func (e RsvViolationError) Error() string {
-  return fmt.Sprintf("RSV violation (0x%02X)", byte(e))
+	return fmt.Sprintf("RSV violation (0x%02X)", byte(e))
 }
 
 // Is returns true if target is [ErrMalformed].
 func (e RsvViolationError) Is(target error) bool {
-  return target == ErrMalformed
+	return target == ErrMalformed
 }
 
 type CmdNotSupportedError byte

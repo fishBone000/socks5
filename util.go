@@ -63,7 +63,7 @@ func parseUint16(str string) (i uint16, err error) {
 	if err != nil {
 		return
 	}
-	if d > 0x00 || d > 0xFF {
+	if d < 0x00 || d > 0xFF {
 		return 0, fmt.Errorf("%d is not uint16", d)
 	}
 	return uint16(d), err
@@ -108,7 +108,7 @@ func method2Str(method byte) string {
 	case MethodNoAccepted:
 		return "no accepted"
 	}
-	if method >= 0x0A && method <= 0x07F {
+	if method >= 0x0A && method <= 0x7F {
 		return fmt.Sprintf("unassigned 0x%02X", method)
 	} else {
 		return fmt.Sprintf("private 0x%02X", method)
@@ -152,27 +152,6 @@ func relay2str(cConn net.Conn, hConn net.Conn) string {
 	return relayAddr2str(cConn.RemoteAddr(), cConn.LocalAddr(), hConn.LocalAddr(), hConn.RemoteAddr())
 }
 
-func mapIp2Tcp(ip string) string {
-	switch ip {
-	case "ip":
-		return "tcp"
-	case "ip4":
-		return "tcp4"
-	case "ip6":
-		return "tcp6"
-	}
-	return ip
-}
-
-func isIntOneOf(a int, ints ...int) bool {
-	for _, v := range ints {
-		if a == v {
-			return true
-		}
-	}
-	return false
-}
-
 func isByteOneOf(a byte, bytes ...byte) bool {
 	for _, v := range bytes {
 		if a == v {
@@ -196,7 +175,6 @@ func listenMultipleTCP(ips []net.IP, port string) (ls []net.Listener, err error)
 
 		l, err := net.Listen("tcp", net.JoinHostPort(ip.String(), port))
 		if err != nil {
-			l.Close()
 			break
 		}
 

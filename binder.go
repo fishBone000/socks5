@@ -27,11 +27,13 @@ import (
 // Currently if req is to be denied, only [RepGeneralFailure]
 // will be replied.
 type Binder struct {
-	// Hostname of the Server, not to be confused with listening address.
+	// Hostname of the server, not to be confused with listening address.
 	// This is the address that will be sent in the first BND reply.
-	// Once parsed, changing it won't be effective.
+	// RFC 1928 states that the addresses in replies to BIND requests shall
+	// be IP addresses, but a host name is considered valid here.
+	// Do not modify this field when Binder is running.
 	Hostname string
-	hostname *AddrPort //
+	hostname *AddrPort
 
 	mux       sync.Mutex
 	listeners map[string]*bindListener
