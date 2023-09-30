@@ -19,7 +19,7 @@ const (
 type LogEntry struct {
 	Time      time.Time // Timestamp
 	Severity  string    // Severity of this error, one of severity constants
-	Verbosity int       // Used by debug entries, higher means more verbose, starts from 0
+	Verbosity int       // Used by debug entries, the higher the more verbose, starts from 0
 	Err       error     // Inner error
 }
 
@@ -56,12 +56,11 @@ func (e *LogEntry) String() string {
 	return s
 }
 
-func (s *MidLayer) sendLog(l LogEntry) {
-	if s.logChan == nil {
-		return
-	}
+func (ml *MidLayer) sendLog(l LogEntry) {
+	ml.mux.Lock()
+	defer ml.mux.Unlock()
 	select {
-	case s.logChan <- l:
+	case ml.logChan <- l:
 	default:
 	}
 }

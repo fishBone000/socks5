@@ -202,9 +202,6 @@ func (ml *MidLayer) ServeClient(conn net.Conn) error { // TODO Check compability
 	ml.dbg(newOpErr("assigned session with UUID"+uuid.String(), conn, nil))
 	hs.uuid = uuid
 
-	time.AfterFunc(PeriodAutoDeny, func() {
-		hs.deny(true)
-	})
 	ml.dbgv(newOpErr(
 		fmt.Sprintf("select one method from % 02X", hs.methods),
 		conn, nil,
@@ -412,15 +409,15 @@ func (ml *MidLayer) handleAssoc(r *AssocRequest, inbound net.Conn) error {
 func (ml *MidLayer) selectMethod(hs *Handshake) (sent bool) {
 	hs.wg.Add(1)
 	ml.mux.Lock()
-	if ml.hndshkChan != nil {
+	select {
+	case ml.hndshkChan <- hs:
+		sent = true
 		ml.mux.Unlock()
-		select {
-		case ml.hndshkChan <- hs:
-			sent = true
-			hs.wg.Wait()
-		default:
-		}
-	} else {
+		time.AfterFunc(PeriodAutoDeny, func() {
+			hs.deny(true)
+		})
+		hs.wg.Wait()
+	default:
 		ml.mux.Unlock()
 	}
 	return
