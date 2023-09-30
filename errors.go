@@ -4,16 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-
-	"github.com/google/uuid"
 )
 
 // ErrMalformed is returned when request/response does not follow SOCKS5 protocol.
 var ErrMalformed = errors.New("malformed")
-
-// ErrNotStarted is returned by [Server.Close] and [Server.CloseAll]
-// if [Server] is not up.
-var ErrNotStarted = errors.New("not started")
 
 // ErrAcceptOrDenyFailed is used by [Connector], [Binder] and [Associator].
 // It indicates the accept and deny methods of the request returned not ok.
@@ -110,4 +104,37 @@ func (e *RequestNotHandledError) Error() string {
 		reason = "not sent"
 	}
 	return fmt.Sprintf("%s request not handled (%s)", e.Type, reason)
+}
+
+type RelayErr struct {
+	ClientRemoteAddr net.Addr
+	ClientLocalAddr  net.Addr
+	HostRemoteAddr   net.Addr
+	HostLocalAddr    net.Addr
+	Client2HostErr   error
+	Host2ClientErr   error
+}
+
+func newRelayErr(clientConn, hostConn net.Conn, chErr, hcErr error) *RelayErr {
+	return &RelayErr{
+		ClientRemoteAddr: clientConn.RemoteAddr(),
+		ClientLocalAddr:  clientConn.LocalAddr(),
+		HostRemoteAddr:   hostConn.RemoteAddr(),
+		HostLocalAddr:    hostConn.LocalAddr(),
+		Client2HostErr:   chErr,
+		Host2ClientErr:   hcErr,
+	}
+}
+
+func (e *RelayErr) Error() string {
+	return fmt.Sprintf(
+		"%s, client to host: %s, host to client: %s",
+		relayAddr2str(e.ClientRemoteAddr, e.ClientLocalAddr, e.HostLocalAddr, e.HostRemoteAddr),
+		e.Client2HostErr, e.Host2ClientErr,
+	)
+}
+
+func (e *RelayErr) Unwrap() (errs []error) {
+	errs = []error{e.Client2HostErr, e.Host2ClientErr}
+	return
 }

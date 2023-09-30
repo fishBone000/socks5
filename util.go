@@ -140,12 +140,16 @@ func rep2str(rep byte) string {
 	}
 }
 
-func relay2str(cConn net.Conn, hConn net.Conn) string {
+func relayAddr2str(craddr, claddr, hladdr, hraddr net.Addr) string {
 	return fmt.Sprintf(
-		"proxy started %s<->%s<->%s<->%s",
-		cConn.RemoteAddr(), cConn.LocalAddr(),
-		hConn.LocalAddr(), hConn.RemoteAddr(),
+		"relay [client %s]<->[%s server %s]<->[%s host]",
+		craddr, claddr,
+		hladdr, hraddr,
 	)
+}
+
+func relay2str(cConn net.Conn, hConn net.Conn) string {
+	return relayAddr2str(cConn.RemoteAddr(), cConn.LocalAddr(), hConn.LocalAddr(), hConn.RemoteAddr())
 }
 
 func mapIp2Tcp(ip string) string {

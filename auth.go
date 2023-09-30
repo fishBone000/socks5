@@ -31,12 +31,12 @@ type Subnegotiator interface {
 // requires.
 type Capsulator interface {
 	// Used for TCP connections.
-	// Server will invode Write for encapsulation, and Read for decapsulation.
+	// MidLayer will invode Write for encapsulation, and Read for decapsulation.
 	// Connection is closed if non-nil error is returned.
 	io.ReadWriter
 
 	// Used for UDP packets. Packet is dropped if non-nil error is returned.
-	// Server doesn't actually invoke these methods,
+	// [MidLayer] doesn't actually invoke these methods,
 	// they are here just for convenience.
 	EncapPacket(p []byte) ([]byte, error)
 	DecapPacket(p []byte) ([]byte, error)

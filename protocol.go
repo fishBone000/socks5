@@ -500,18 +500,17 @@ func (r *ConnectRequest) accept(conn net.Conn, addr *AddrPort) (ok bool) {
 
 type BindRequest struct {
 	Request
-	hostConn        net.Conn
-	bindMux         sync.Mutex // To avoid simultainous rw on reply field, Bind uses it to check if the request is accepted.
-	bindWg          sync.WaitGroup
-	bindOnce        sync.Once
-	bindReply       *reply
-	bindTimeoutDeny bool
+	hostConn  net.Conn
+	bindMux   sync.Mutex // To avoid simultainous rw on reply field, Bind uses it to check if the request is accepted.
+	bindWg    sync.WaitGroup
+	bindOnce  sync.Once
+	bindReply *reply
 }
 
 // Accept accepts the request, and tells the client which address the SOCKS server
 // will listen on. This is the first reply from the server.
 //
-// Note that [Server] doesn't actually listens it for you. You can implement a
+// Note that [MidLayer] doesn't actually listens it for you. You can implement a
 // listener yourself or use Binder.
 // Port 0 is valid and will be sent as-is.
 func (r *BindRequest) Accept(addr string) (ok bool) {
@@ -596,7 +595,6 @@ func (r *BindRequest) denyBind(rep byte, addr *AddrPort, timeoutDeny bool) (ok b
 		}
 		r.bindReply = new(reply)
 		r.bindReply.addr = addr
-		r.bindTimeoutDeny = timeoutDeny
 		r.bindWg.Done()
 		ok = true
 	})
@@ -608,18 +606,23 @@ type AssocRequest struct {
 	notifyOnce sync.Once
 	notify     func(error)
 	terminate  func() error
+	finalErr   error
 }
 
 // Accept accepts the request.
 //
-// notify is called when the association terminates, e.g. TCP disconnection,
-// IO error.
-//
 // terminate can be used to terminate the association by closing the control
-// connection. Be aware it is nil if Accept is no-op.
+// connection. Be aware it is nil if ok is false.
 //
-// Note that [Server] doesn't actually relays the UDP traffic.
-// Implement an associator yourself, or use [Associator].
+// notify is called when the association terminates, e.g. TCP disconnection,
+// IO error, call on terminate.
+// If client closed the control connection, reason will be [io.EOF].
+// If terminate is called, reason will be nil.
+// Otherwise, reason will be read error on the control connection.
+// notify will only be called once, if it's not nil.
+//
+// Note that [MidLayer] doesn't actually relays the UDP traffic.
+// Implement a relay yourself, or use [Associator].
 //
 // Port 0 is valid and will be sent as-is.
 func (r *AssocRequest) Accept(addr string, notify func(reason error)) (terminate func() error, ok bool) {

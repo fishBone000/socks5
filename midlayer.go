@@ -1,7 +1,7 @@
 // # Description
 //
 // Package socksy5 provides a SOCKS5 middle layer
-// and utils for easy request handling.
+// and utils for simple request handling.
 // [MidLayer] implements the middle layer, which accepts client connections
 // in the form of [net.Conn] (see [MidLayer.ServeClient]),
 // then wraps client handshakes and requests as structs,
@@ -17,7 +17,7 @@
 // [Listen] is also provided as a simple listening util which passes [net.Conn]
 // to [MidLayer] automatically.
 // They are for ease of use if you want to set up a SOCKS5 server fast, thus
-// only have basic features. You can handle handshakes and requests yourself
+// they only have basic features. You can handle handshakes and requests yourself
 // if they don't meet your requirement.
 //
 // # How to use
@@ -26,17 +26,14 @@
 // then [MidLayer] will begin communicating with the client.
 // When client begins handshakes or sends requests, [MidLayer] will emit
 // [Handshake], [ConnectRequest], [BindRequest] and [AssocRequest] via channels.
-// Invoke methods of them to decide which kind of authentication to use,
+// Call methods of them to decide which kind of authentication to use,
 // whether accept or reject and so on.
 // Logs are emitted via channels too.
 // See [MidLayer.LogChan], [MidLayer.HandshakeChan], [MidLayer.RequestChan].
 //
 // # Limitations
 //
-// [MidLayer] is just a middle layer. It doesn't dial outbound connections,
-// relay TCP connection for BIND requests, nor relay UDP packets.
-//
-// Also, socksy5 provides limited implementations of authenticate methods,
+// socksy5 provides limited implementations of authenticate methods,
 // for quite a long time.
 package socksy5
 
@@ -51,7 +48,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Constants for server policy.
+// Constants of [MidLayer] policy.
 const (
 	// Channel capacity of all channels returned by MidLayer's channel methods.
 	ChanCap = 64
@@ -62,8 +59,6 @@ const (
 )
 
 // A MidLayer is a SOCKS5 middle layer. See package description for detail.
-//
-// Use channel methods (e.g. [MidLayer.HandshakeChan]) to deal with logging, requests e.t.c..
 type MidLayer struct {
 	mux         sync.Mutex
 	logChan     chan LogEntry
@@ -76,11 +71,12 @@ type MidLayer struct {
 // It's useful if you want to kill all sessions.
 //
 // If a connection has failed to close,
-// the [MidLayer] won't try to close it next time.
+// ml won't try to close it next time.
+// errs contain errors returned by [net.Conn.Close].
 func (ml *MidLayer) Close() (errs []error) {
 	ml.mux.Lock()
 	defer ml.mux.Unlock()
-	ml.info(newOpErr("server shut down", nil, nil))
+	ml.info(newOpErr("closing all connections", nil, nil))
 	for c := range ml.conns {
 		ml.info(newOpErr("connection close", c, nil))
 
@@ -146,7 +142,7 @@ func (ml *MidLayer) LogChan() <-chan LogEntry {
 	if ml.logChan == nil {
 		ml.logChan = make(chan LogEntry, ChanCap)
 	}
-	return (<-chan LogEntry)(ml.logChan)
+	return ml.logChan
 }
 
 // All channel methods create a corresponding channel if not ever created.
@@ -158,7 +154,7 @@ func (ml *MidLayer) HandshakeChan() <-chan *Handshake {
 	if ml.hndshkChan == nil {
 		ml.hndshkChan = make(chan *Handshake, ChanCap)
 	}
-	return (<-chan *Handshake)(ml.hndshkChan)
+	return ml.hndshkChan
 }
 
 // RequestChan is guaranteed to return a channel that receives one of
@@ -176,30 +172,23 @@ func (ml *MidLayer) RequestChan() <-chan any {
 	return (<-chan any)(ml.requestChan)
 }
 
-func (ml *MidLayer) listen() {
-}
-
 // ServeClient starts serving the client and blocks til finish.
-// ServeClient can be invoked without s being started,
-// this is useful if inbound connection listening need to be handled explicitly.
-//
-// Note that [MidLayer.Close] and [MidLayer.CloseAll] will still try to close
-// connections created during serving, even if the server is not started.
-func (ml *MidLayer) ServeClient(conn net.Conn) { // TODO Check compability with net.Conn (nil addr etc)
+func (ml *MidLayer) ServeClient(conn net.Conn) error { // TODO Check compability with net.Conn (nil addr etc)
 	ml.info(newOpErr("new connection", conn, nil))
-	hs, err := readHandshake(conn)
-	if err != nil {
-		ml.err(newOpErr("read handshake", conn, err))
-		if err := conn.Close(); err != nil {
-			ml.err(newOpErr("close connection", conn, err))
+	hs, rerr := readHandshake(conn)
+	if rerr != nil {
+		rerr = newOpErr("read handshake", conn, rerr)
+		ml.err(rerr)
+		if cerr := conn.Close(); cerr != nil {
+			ml.err(newOpErr("close connection", conn, cerr))
 		}
-		return
+		return rerr
 	}
 	hs.laddr = conn.LocalAddr()
 	hs.raddr = conn.RemoteAddr()
 	ml.regConn(conn)
 	uuid := uuid.New()
-	ml.dbg(newOpErr("assigned session with UUID %s"+uuid.String(), conn, nil))
+	ml.dbg(newOpErr("assigned session with UUID"+uuid.String(), conn, nil))
 	hs.uuid = uuid
 
 	time.AfterFunc(PeriodAutoDeny, func() {
@@ -212,41 +201,43 @@ func (ml *MidLayer) ServeClient(conn net.Conn) { // TODO Check compability with 
 	sent := ml.selectMethod(hs)
 
 	if !sent || hs.timeoutDeny {
-		ml.warn(nil, newOpErr("serve", conn, &RequestNotHandledError{Type: "handshake", Timeout: hs.timeoutDeny}))
+		err := newOpErr("serve", conn, &RequestNotHandledError{Type: "handshake", Timeout: hs.timeoutDeny})
+		ml.warn(nil, err)
 		ml.closeConn(conn)
-		return
+		return err
 	}
 
 	ml.dbgv(newOpErr("selected method "+method2Str(hs.methodChosen), conn, nil))
 
 	hsReply := []byte{VerSOCKS5, hs.methodChosen}
-	if _, err := conn.Write(hsReply); err != nil {
-		ml.err(newOpErr("reply handshake", conn, err))
+	if _, werr := conn.Write(hsReply); werr != nil {
+		err := newOpErr("reply handshake", conn, werr)
+		ml.err(err)
 		ml.closeConn(conn)
-		return
+		return err
 	}
 	if hs.methodChosen == MethodNoAccepted {
 		time.AfterFunc(PeriodClose, func() {
 			ml.closeConn(conn)
 		})
-		return
+		return nil
 	}
 
 	ml.dbg(newOpErr("start subnegotiation "+hs.neg.Type(), conn, nil))
-	capper, err := hs.neg.Negotiate(conn)
-	if err != nil {
-		e := newOpErr("subnegotiate", conn, err)
-		if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrMalformed) {
-			ml.warn(e)
+	capper, rerr := hs.neg.Negotiate(conn)
+	if rerr != nil {
+		err := newOpErr("subnegotiate", conn, rerr)
+		if errors.Is(rerr, ErrAuthFailed) || errors.Is(rerr, ErrMalformed) {
+			ml.warn(err)
 		} else {
-			ml.err(e)
+			ml.err(err)
 		}
 
 		time.AfterFunc(PeriodClose, func() {
 			ml.closeConn(conn)
 		})
 
-		return
+		return err
 	}
 
 	if capper == nil {
@@ -254,21 +245,20 @@ func (ml *MidLayer) ServeClient(conn net.Conn) { // TODO Check compability with 
 	}
 	ml.dbgv(newOpErr(fmt.Sprintf("using capsulation %T", capper), conn, nil))
 
-	req, err := readRequest(capper)
-	if err != nil {
-		ml.err(newOpErr("read request", conn, err))
+	req, rerr := readRequest(capper)
+	if rerr != nil {
+		err := newOpErr("read request", conn, rerr)
+		ml.err(err)
 		ml.closeConn(conn)
-		return
+		return err
 	}
-	req.capper = capper
-	req.uuid = uuid
 
 	ml.dbg(newOpErr("received request "+cmd2str(req.cmd), conn, nil))
-	ml.dbgv(newOpErr("reply to request sent", conn, nil))
 
+	req.capper = capper
+	req.uuid = uuid
 	req.laddr = conn.LocalAddr()
 	req.raddr = conn.RemoteAddr()
-	req.wg.Add(1)
 
 	// Code below is kind of messy I know, because they are sorta workarounds.
 	// req needs to be re-assigned here, because it will be value-copied. see below
@@ -307,127 +297,105 @@ func (ml *MidLayer) ServeClient(conn net.Conn) { // TODO Check compability with 
 		req = &ar.Request
 		req.dst.Protocol = "udp"
 	default:
-		ml.warn(newOpErr("serve", conn, &CmdNotSupportedError{Cmd: req.cmd}))
+		err := newOpErr("serve", conn, &CmdNotSupportedError{Cmd: req.cmd})
+		ml.warn(err)
 		req.deny(RepCmdNotSupported, emptyAddr, false)
 		raw, _ := req.reply.MarshalBinary()
-		if _, err := capper.Write(raw); err != nil {
-			ml.err(newOpErr("reply request", conn, err))
+		if _, werr := capper.Write(raw); werr != nil {
+			ml.err(newOpErr("reply request", conn, werr))
 			ml.closeConn(conn)
+		} else {
+			time.AfterFunc(PeriodClose, func() {
+				ml.closeConn(conn)
+			})
 		}
-		return
+		return err
 	}
-
-	time.AfterFunc(PeriodAutoDeny, func() {
-		req.deny(RepGeneralFailure, emptyAddr, true)
-	})
 
 	ml.dbgv(newOpErr("evaluate request "+cmd2str(req.cmd), conn, nil))
-	sent = ml.evaluateRequest(wrappedReq)
+	sent = ml.evaluateRequest(wrappedReq, req)
 
-	if sent {
-		req.wg.Wait()
-	} else {
-		ml.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmd2str(req.cmd)}))
-		req.deny(RepGeneralFailure, emptyAddr, false)
-	}
-
-	if req.timeoutDeny {
-		ml.warn(newOpErr("serve", conn, &RequestNotHandledError{Type: cmd2str(req.cmd), Timeout: true}))
+	var unhandledErr error
+	if !sent || req.timeoutDeny {
+		unhandledErr = &RequestNotHandledError{Type: cmd2str(req.cmd), Timeout: req.timeoutDeny}
+		ml.warn(newOpErr("serve", conn, unhandledErr))
 	}
 
 	ml.dbg(newOpErr(fmt.Sprintf("reply %s to request %s", rep2str(req.reply.rep), cmd2str(req.cmd)), conn, nil))
 
 	raw, _ := req.reply.MarshalBinary()
-	if _, err := capper.Write(raw); err != nil {
-		ml.err(newOpErr("reply request", conn, err))
-		ml.closeConn(conn)
-		return
+	_, werr := capper.Write(raw)
+	if werr != nil {
+		ml.err(newOpErr("reply request", conn, werr))
+		if unhandledErr != nil {
+			return unhandledErr
+		}
+		return rerr
 	}
 
 	if req.reply.rep != RepSucceeded {
-		ml.dbg(newOpErr(fmt.Sprintf("reply %s to request %s", rep2str(req.reply.rep), cmd2str(req.cmd)), conn, nil))
+		time.AfterFunc(PeriodClose, func() {
+			ml.closeConn(conn)
+		})
+		return unhandledErr
 	}
 
 	switch req.cmd {
 	case CmdCONNECT:
-		ml.handleConnect(wrappedReq.(*ConnectRequest), capper, conn)
+		return ml.handleConnect(wrappedReq.(*ConnectRequest), capper, conn)
 	case CmdBIND:
-		ml.handleBind(wrappedReq.(*BindRequest), capper, conn)
+		return ml.handleBind(wrappedReq.(*BindRequest), capper, conn)
 	case CmdASSOC:
-		ml.handleAssoc(wrappedReq.(*AssocRequest), conn)
+		return ml.handleAssoc(wrappedReq.(*AssocRequest), conn)
 	}
+	return errors.New("I don't think it should happen, right? In case it really did, BUG CODE 0x2A!")
 }
 
-func (ml *MidLayer) handleConnect(r *ConnectRequest, capper Capsulator, inbound net.Conn) {
-	if r.reply.rep != RepSucceeded {
-		time.AfterFunc(PeriodClose, func() {
-			ml.closeConn(inbound)
-		})
-		return
-	}
-
+func (ml *MidLayer) handleConnect(r *ConnectRequest, capper Capsulator, inbound net.Conn) error {
 	ml.regConn(r.outbound)
 
 	ml.info(newOpErr("relay CONNECT started "+relay2str(inbound, r.outbound), nil, nil))
 
-	ml.relay(capper, inbound, r.outbound)
+	return ml.relay(capper, inbound, r.outbound)
 }
 
-func (ml *MidLayer) handleBind(r *BindRequest, capper Capsulator, inbound net.Conn) {
-	if r.reply.rep != RepSucceeded {
-		time.AfterFunc(PeriodClose, func() {
-			ml.closeConn(r.hostConn)
-		})
-		return
-	}
-
-	time.AfterFunc(PeriodAutoDeny, func() {
-		r.denyBind(RepGeneralFailure, emptyAddr, true)
-	})
+func (ml *MidLayer) handleBind(r *BindRequest, capper Capsulator, clientConn net.Conn) error {
 	r.bindWg.Wait()
-
-	if r.bindTimeoutDeny {
-		ml.warn(newOpErr("serve", inbound, &RequestNotHandledError{Type: cmd2str(CmdBIND), Timeout: true}))
-	}
 
 	bound := r.bindReply.rep == RepSucceeded
 	if bound {
 		ml.regConn(r.hostConn)
 	}
 
-	ml.dbg(newOpErr(fmt.Sprintf("reply %s to request BND(2nd)", rep2str(r.bindReply.rep)), inbound, nil))
+	ml.dbg(newOpErr(fmt.Sprintf("reply %s to request BND(2nd reply)", rep2str(r.bindReply.rep)), clientConn, nil))
 	raw, _ := r.bindReply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
-		ml.err(newOpErr("reply BND(2nd)", inbound, err))
-		ml.closeConn(inbound)
+		ml.err(newOpErr("reply BND(2nd)", clientConn, err))
+		ml.closeConn(clientConn)
 		ml.closeConn(r.hostConn)
-		return
+		return err
 	}
 
 	if bound {
-		ml.info(newOpErr("relay BND started "+relay2str(inbound, r.hostConn), nil, nil))
-		ml.relay(capper, inbound, r.hostConn)
+		ml.info(newOpErr("relay BND started "+relay2str(clientConn, r.hostConn), nil, nil))
+		return ml.relay(capper, clientConn, r.hostConn)
 	}
+	return nil
 }
 
-func (ml *MidLayer) handleAssoc(r *AssocRequest, inbound net.Conn) {
-	if r.reply.rep != RepSucceeded {
-		time.AfterFunc(PeriodClose, func() {
-			ml.closeConn(inbound)
-		})
-		return
-	}
-
+func (ml *MidLayer) handleAssoc(r *AssocRequest, inbound net.Conn) error {
 	_, err := io.Copy(io.Discard, inbound)
 	r.notifyOnce.Do(func() {
-		if r.notify == nil {
-			return
-		}
 		if err == nil {
 			err = io.EOF
 		}
-		r.notify(err)
+		r.finalErr = err
+		if r.notify == nil {
+			return
+		}
+		go r.notify(err)
 	})
+	return r.finalErr
 }
 
 func (ml *MidLayer) selectMethod(hs *Handshake) (sent bool) {
@@ -447,22 +415,25 @@ func (ml *MidLayer) selectMethod(hs *Handshake) (sent bool) {
 	return
 }
 
-func (ml *MidLayer) evaluateRequest(r any) (sent bool) {
+func (ml *MidLayer) evaluateRequest(wrapped any, inner *Request) (sent bool) {
+	inner.wg.Add(1)
 	ml.mux.Lock()
-	if ml.requestChan != nil {
+	select {
+	case ml.requestChan <- wrapped:
 		ml.mux.Unlock()
-		select {
-		case ml.requestChan <- r:
-			sent = true
-		default:
-		}
-	} else {
+		sent = true
+		time.AfterFunc(PeriodAutoDeny, func() {
+			inner.deny(RepGeneralFailure, emptyAddr, true)
+		})
+		inner.wg.Wait()
+	default:
 		ml.mux.Unlock()
+		inner.deny(RepGeneralFailure, emptyAddr, false)
 	}
 	return
 }
 
-func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) {
+func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) *RelayErr {
 	var chErr error
 	var hcErr error
 	wg := sync.WaitGroup{}
@@ -478,27 +449,19 @@ func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) {
 	}()
 	wg.Wait()
 
-  if chErr == nil {
-    chErr = io.EOF
-  }
-  if hcErr == nil {
-    hcErr = io.EOF
-  }
+	if chErr == nil {
+		chErr = io.EOF
+	}
+	if hcErr == nil {
+		hcErr = io.EOF
+	}
 
-  msg := fmt.Sprintf("relay from client %s to host %s", clientConn.RemoteAddr(), hostConn.RemoteAddr())
-  if chErr == io.EOF {
-    ml.info(newOpErr(msg, nil, chErr))
-  } else {
-    ml.err(newOpErr(msg, nil, chErr))
-  }
+	ml.closeConn(clientConn)
+	ml.closeConn(hostConn)
 
-  msg = fmt.Sprintf("relay from host %s to client %s", hostConn.RemoteAddr(), clientConn.RemoteAddr())
-  if hcErr == io.EOF {
-    ml.info(newOpErr(msg, nil, hcErr))
-  } else {
-    ml.err(newOpErr(msg, nil, hcErr))
-  }
-
-  ml.closeConn(clientConn)
-  ml.closeConn(hostConn)
+	// I know that even if one of the 2 conns closed normally, MidLayer will still
+	// complain about it...But I have no better idea for now.
+	err := newRelayErr(clientConn, hostConn, chErr, hcErr)
+	ml.err(err)
+	return err
 }

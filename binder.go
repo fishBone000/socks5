@@ -21,8 +21,8 @@ import (
 // and will only be created again when next time Binder is required to listen
 // on that port.
 //
-// The listening port registry is independent
-// across different Binders and [Server].
+// Binders and [MidLayer] don't share port registry,
+// so port usage conflicts among them is possible.
 //
 // Currently if req is to be denied, only [RepGeneralFailure]
 // will be replied.
