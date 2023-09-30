@@ -13,7 +13,8 @@ import (
 	"github.com/google/uuid"
 )
 
-const VerSOCKS5 byte = 0x05 // SOCKS5 VER byte
+// SOCKS5 VER byte
+const VerSOCKS5 byte = 0x05 
 
 // Authentication METHOD codes.
 const (
@@ -38,9 +39,10 @@ const (
 	CmdASSOC   byte = 0x03
 )
 
-const RSV byte = 0x00 // Value of reserved bytes
+// Value of reserved bytes
+const RSV byte = 0x00 
 
-// ATYP codes (address types).
+// ATYP codes (address types)
 const (
 	ATYPV4     byte = 0x01 // IPv4
 	ATYPDOMAIN byte = 0x03 // Fully-qualified domain name
@@ -60,7 +62,7 @@ const (
 	RepAddrTypeNotSupported    byte = 0x08
 )
 
-// An AddrPort stands for the address and the port
+// An AddrPort represents the address and the port
 // sent in SOCKS5 requests and replies.
 type AddrPort struct {
 	// ATYP byte value
@@ -72,7 +74,7 @@ type AddrPort struct {
 	Addr []byte
 	Port uint16
 
-	// One of "tcp" and "udp", just for convenience
+	// One of "tcp" and "udp", [AddrPort.Network] relies on this field. 
 	Protocol string
 }
 
@@ -96,7 +98,7 @@ func readAddrPort(reader io.Reader) (*AddrPort, error) {
 		}
 		content = make([]byte, l)
 	default:
-		return nil, ErrMalformed
+		return nil, ATYPNotSupportedError(atyp)
 	}
 	if _, err := io.ReadFull(reader, content); err != nil {
 		return nil, err
@@ -215,7 +217,7 @@ func (a *AddrPort) MarshalBinary() (data []byte, err error) {
 
 	if a.Type == ATYPDOMAIN {
 		if len(a.Addr) > 0xFF {
-			return nil, ErrMalformed
+			return nil, fmt.Errorf("%w: domain name length too long (%d Bytes)", ErrMalformed, len(a.Addr))
 		}
 		l = 1 + 1 + len(a.Addr) + 2
 		data = make([]byte, l)
@@ -223,13 +225,13 @@ func (a *AddrPort) MarshalBinary() (data []byte, err error) {
 		copy(data[2:], a.Addr)
 	} else if a.Type == ATYPV4 || a.Type == ATYPV6 {
 		if a.Type == ATYPV4 && len(a.Addr) != 4 || a.Type == ATYPV6 && len(a.Addr) != 16 {
-			return nil, ErrMalformed
+			return nil, fmt.Errorf("%w: address length incorrect (%d Bytes)", ErrMalformed, len(a.Addr))
 		}
 		l = 1 + len(a.Addr) + 2
 		data = make([]byte, l)
 		copy(data[1:], a.Addr)
 	} else {
-		return nil, ErrMalformed
+		return nil, ATYPNotSupportedError(a.Type)
 	}
 
 	data[0] = a.Type
@@ -268,7 +270,7 @@ func readHandshake(reader io.Reader) (*Handshake, error) {
 		return nil, err
 	}
 	if hs.ver != VerSOCKS5 {
-		return nil, ErrMalformed
+		return nil, VerIncorrectError(hs.ver)
 	}
 	hs.nmethods, err = readByte(reader)
 	if err != nil {
@@ -383,7 +385,7 @@ func readRequest(reader io.Reader) (*Request, error) {
 		return nil, err
 	}
 	if ver != VerSOCKS5 {
-		return nil, ErrMalformed
+		return nil, VerIncorrectError(ver)
 	}
 
 	req := new(Request)
@@ -397,7 +399,7 @@ func readRequest(reader io.Reader) (*Request, error) {
 		return nil, err
 	}
 	if rsv != RSV {
-		return nil, ErrMalformed
+		return nil, RsvViolationError(rsv)
 	}
 
 	req.dst, err = readAddrPort(reader)
@@ -442,9 +444,9 @@ func (r *Request) Deny(rep byte, addr string) (ok bool) {
 func (r *Request) deny(rep byte, addr *AddrPort, timeoutDeny bool) (ok bool) {
 	r.once.Do(func() {
 		if rep == RepSucceeded {
-			r.reply.rep = RepGeneralFailure
+			r.reply.code = RepGeneralFailure
 		} else {
-			r.reply.rep = rep
+			r.reply.code = rep
 		}
 		r.reply.addr = addr
 		r.timeoutDeny = timeoutDeny
@@ -589,9 +591,9 @@ func (r *BindRequest) DenyBind(rep byte, addr string) (ok bool) {
 func (r *BindRequest) denyBind(rep byte, addr *AddrPort, timeoutDeny bool) (ok bool) {
 	r.bindOnce.Do(func() {
 		if rep == RepSucceeded {
-			r.bindReply.rep = RepGeneralFailure
+			r.bindReply.code = RepGeneralFailure
 		} else {
-			r.bindReply.rep = rep
+			r.bindReply.code = rep
 		}
 		r.bindReply = new(reply)
 		r.bindReply.addr = addr
@@ -647,7 +649,7 @@ func (r *AssocRequest) accept(addr *AddrPort, notify func(error)) (terminate fun
 }
 
 type reply struct {
-	rep  byte
+	code  byte
 	addr *AddrPort
 }
 
@@ -657,7 +659,7 @@ func (r *reply) MarshalBinary() (data []byte, err error) {
 	l := 1 + 1 + 1 + len(aBytes)
 	data = make([]byte, l)
 	data[0] = VerSOCKS5
-	data[1] = r.rep
+	data[1] = r.code
 	data[2] = RSV
 	copy(data[3:], aBytes)
 	return data, nil
@@ -670,6 +672,8 @@ type udpPacket struct {
 }
 
 func (p *udpPacket) UnmarshalBinary(data []byte) error {
+  // We use ErrMalformed here instead of specific err type, because 
+  // the packet will be dropped by Associator silently. 
 	if len(data) < 3 {
 		return ErrMalformed
 	}

@@ -297,7 +297,7 @@ func (ml *MidLayer) ServeClient(conn net.Conn) error { // TODO Check compability
 		req = &ar.Request
 		req.dst.Protocol = "udp"
 	default:
-		err := newOpErr("serve", conn, &CmdNotSupportedError{Cmd: req.cmd})
+		err := newOpErr("serve", conn, CmdNotSupportedError(req.cmd))
 		ml.warn(err)
 		req.deny(RepCmdNotSupported, emptyAddr, false)
 		raw, _ := req.reply.MarshalBinary()
@@ -321,7 +321,7 @@ func (ml *MidLayer) ServeClient(conn net.Conn) error { // TODO Check compability
 		ml.warn(newOpErr("serve", conn, unhandledErr))
 	}
 
-	ml.dbg(newOpErr(fmt.Sprintf("reply %s to request %s", rep2str(req.reply.rep), cmd2str(req.cmd)), conn, nil))
+	ml.dbg(newOpErr(fmt.Sprintf("reply %s to request %s", rep2str(req.reply.code), cmd2str(req.cmd)), conn, nil))
 
 	raw, _ := req.reply.MarshalBinary()
 	_, werr := capper.Write(raw)
@@ -333,7 +333,7 @@ func (ml *MidLayer) ServeClient(conn net.Conn) error { // TODO Check compability
 		return rerr
 	}
 
-	if req.reply.rep != RepSucceeded {
+	if req.reply.code != RepSucceeded {
 		time.AfterFunc(PeriodClose, func() {
 			ml.closeConn(conn)
 		})
@@ -362,12 +362,12 @@ func (ml *MidLayer) handleConnect(r *ConnectRequest, capper Capsulator, inbound 
 func (ml *MidLayer) handleBind(r *BindRequest, capper Capsulator, clientConn net.Conn) error {
 	r.bindWg.Wait()
 
-	bound := r.bindReply.rep == RepSucceeded
+	bound := r.bindReply.code == RepSucceeded
 	if bound {
 		ml.regConn(r.hostConn)
 	}
 
-	ml.dbg(newOpErr(fmt.Sprintf("reply %s to request BND(2nd reply)", rep2str(r.bindReply.rep)), clientConn, nil))
+	ml.dbg(newOpErr(fmt.Sprintf("reply %s to request BND(2nd reply)", rep2str(r.bindReply.code)), clientConn, nil))
 	raw, _ := r.bindReply.MarshalBinary()
 	if _, err := capper.Write(raw); err != nil {
 		ml.err(newOpErr("reply BND(2nd)", clientConn, err))

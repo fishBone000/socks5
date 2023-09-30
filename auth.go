@@ -2,6 +2,7 @@ package socksy5
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 )
@@ -82,6 +83,16 @@ func (c NoCap) DecapPacket(p []byte) ([]byte, error) {
 	return q, nil
 }
 
+type UsrPwdVerIncorrectError byte
+
+func (e UsrPwdVerIncorrectError) Error() string {
+  return fmt.Sprintf("VER incorrect (0x%02X)", byte(e))
+}
+
+func (e UsrPwdVerIncorrectError) Is(target error) bool {
+  return target == ErrMalformed
+}
+
 // A UsrPwdSubneg is a [Subnegotiator] for Username/Password Authentication.
 // Implements RFC 1929.
 type UsrPwdSubneg struct {
@@ -97,7 +108,7 @@ func (n UsrPwdSubneg) Negotiate(rw io.ReadWriter) (c Capsulator, err error) {
 		return nil, err
 	}
 	if ver != VerUsrPwd {
-		return nil, ErrMalformed
+		return nil, UsrPwdVerIncorrectError(ver)
 	}
 
 	var ulen, plen byte

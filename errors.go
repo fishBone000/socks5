@@ -6,8 +6,55 @@ import (
 	"net"
 )
 
-// ErrMalformed is returned when request/response does not follow SOCKS5 protocol.
+// ErrMalformed represents protocol format violation. 
+// Usually a more specific error type is used, see: 
+// [VerIncorrectError], [RsvViolationError], [CmdNotSupportedError] 
+// and [ATYPNotSupportedError]. 
 var ErrMalformed = errors.New("malformed")
+
+type VerIncorrectError byte
+
+func (e VerIncorrectError) Error() string {
+  return fmt.Sprintf("VER incorrect (0x%02X)", byte(e))
+}
+
+// Is returns true if target is [ErrMalformed].
+func (e VerIncorrectError) Is(target error) bool {
+  return target == ErrMalformed
+}
+
+type RsvViolationError byte
+
+func (e RsvViolationError) Error() string {
+  return fmt.Sprintf("RSV violation (0x%02X)", byte(e))
+}
+
+// Is returns true if target is [ErrMalformed].
+func (e RsvViolationError) Is(target error) bool {
+  return target == ErrMalformed
+}
+
+type CmdNotSupportedError byte
+
+func (e CmdNotSupportedError) Error() string {
+	return fmt.Sprintf("CMD 0x%02X not supported", byte(e))
+}
+
+// Is returns true if target is [ErrMalformed].
+func (e CmdNotSupportedError) Is(target error) bool {
+	return target == ErrMalformed
+}
+
+type ATYPNotSupportedError byte
+
+func (e ATYPNotSupportedError) Error() string {
+	return fmt.Sprintf("ATYP 0x%02X not supported", byte(e))
+}
+
+// Is returns true if target is [ErrMalformed].
+func (e ATYPNotSupportedError) Is(target error) bool {
+	return target == ErrMalformed
+}
 
 // ErrAcceptOrDenyFailed is used by [Connector], [Binder] and [Associator].
 // It indicates the accept and deny methods of the request returned not ok.
@@ -73,17 +120,6 @@ func (e *OpError) Unwrap() error {
 		return nil
 	}
 	return e.Err
-}
-
-type CmdNotSupportedError struct {
-	Cmd byte
-}
-
-func (e *CmdNotSupportedError) Error() string {
-	if e == nil {
-		return "<nil>"
-	}
-	return fmt.Sprintf("CMD 0x%02X not supported", e.Cmd)
 }
 
 // A RequestNotHandledError can be received from the error channel when a handshake
