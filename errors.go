@@ -7,7 +7,7 @@ import (
 )
 
 // ErrMalformed represents protocol format violation.
-// Usually a more specific error type is used, see:
+// Usually a more specific error type is used:
 // [VerIncorrectError], [RsvViolationError], [CmdNotSupportedError],
 // [ATYPNotSupportedError] and [UsrPwdVerIncorrectErr].
 var ErrMalformed = errors.New("malformed")
@@ -56,13 +56,15 @@ func (e ATYPNotSupportedError) Is(target error) bool {
 	return target == ErrMalformed
 }
 
-// ErrAcceptOrDenyFailed is used by [Connector], [Binder] and [Associator].
-// It indicates the accept and deny methods of the request returned not ok.
+// ErrAcceptOrDenyFailed is used by [Connect], [Binder] and [Associator].
+// It indicates that the accept and deny methods of the request returned not ok.
 var ErrAcceptOrDenyFailed = errors.New("request already handled")
 
 // An OpError contains Op string describing in which operation has the error occured.
+// Currently the error util of socksy5 is not well designed, so OpError is for now
+// just for the convenience of converting errors to strings.
 type OpError struct {
-	Op         string // E.g. "read handshake", "serve", "close listener".
+	Op         string // E.g. "read handshake", "serve", "reply".
 	LocalAddr  net.Addr
 	RemoteAddr net.Addr
 	Err        error // Inner error
@@ -142,7 +144,9 @@ func (e *RequestNotHandledError) Error() string {
 	return fmt.Sprintf("%s request not handled (%s)", e.Type, reason)
 }
 
-type RelayErr struct {
+// A RelayError represents errors and address info of TCP traffic relaying
+// for CONNECT and BIND requests.
+type RelayError struct {
 	ClientRemoteAddr net.Addr
 	ClientLocalAddr  net.Addr
 	HostRemoteAddr   net.Addr
@@ -151,8 +155,8 @@ type RelayErr struct {
 	Host2ClientErr   error
 }
 
-func newRelayErr(clientConn, hostConn net.Conn, chErr, hcErr error) *RelayErr {
-	return &RelayErr{
+func newRelayErr(clientConn, hostConn net.Conn, chErr, hcErr error) *RelayError {
+	return &RelayError{
 		ClientRemoteAddr: clientConn.RemoteAddr(),
 		ClientLocalAddr:  clientConn.LocalAddr(),
 		HostRemoteAddr:   hostConn.RemoteAddr(),
@@ -162,7 +166,7 @@ func newRelayErr(clientConn, hostConn net.Conn, chErr, hcErr error) *RelayErr {
 	}
 }
 
-func (e *RelayErr) Error() string {
+func (e *RelayError) Error() string {
 	return fmt.Sprintf(
 		"%s, client to host: %s, host to client: %s",
 		relayAddr2str(e.ClientRemoteAddr, e.ClientLocalAddr, e.HostLocalAddr, e.HostRemoteAddr),
@@ -170,7 +174,7 @@ func (e *RelayErr) Error() string {
 	)
 }
 
-func (e *RelayErr) Unwrap() (errs []error) {
+func (e *RelayError) Unwrap() (errs []error) {
 	errs = []error{e.Client2HostErr, e.Host2ClientErr}
 	return
 }

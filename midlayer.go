@@ -179,6 +179,11 @@ func (ml *MidLayer) RequestChan() <-chan any {
 }
 
 // ServeClient starts serving the client and blocks til finish.
+//
+// Note that if the client sends CONNECT or BIND request, even if the request is
+// accepted and the TCP traffic relaying is successful
+// (one of the connections closed normally),
+// a [RelayError] is still returned.
 func (ml *MidLayer) ServeClient(conn net.Conn) error { // TODO Check compability with net.Conn (nil addr etc)
 	ml.info(newOpErr("new connection", conn, nil))
 	hs, rerr := readHandshake(conn)
@@ -439,7 +444,7 @@ func (ml *MidLayer) evaluateRequest(wrapped any, inner *Request) (sent bool) {
 	return
 }
 
-func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) *RelayErr {
+func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) *RelayError {
 	var chErr error
 	var hcErr error
 	wg := sync.WaitGroup{}
