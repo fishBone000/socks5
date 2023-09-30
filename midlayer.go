@@ -30,11 +30,15 @@
 // whether accept or reject and so on.
 // Logs are emitted via channels too.
 // See [MidLayer.LogChan], [MidLayer.HandshakeChan], [MidLayer.RequestChan].
+// User of this package should read [Request], as it contains general info about 
+// different types of requests. 
 //
-// # Limitations
+// # Note
 //
 // socksy5 provides limited implementations of authenticate methods,
 // for quite a long time.
+// [MidLayer] does relay TCP traffic, but it doesn't dial outbound or
+// relay UDP traffic. 
 package socksy5
 
 import (

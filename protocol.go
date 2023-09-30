@@ -14,7 +14,7 @@ import (
 )
 
 // SOCKS5 VER byte
-const VerSOCKS5 byte = 0x05 
+const VerSOCKS5 byte = 0x05
 
 // Authentication METHOD codes.
 const (
@@ -40,7 +40,7 @@ const (
 )
 
 // Value of reserved bytes
-const RSV byte = 0x00 
+const RSV byte = 0x00
 
 // ATYP codes (address types)
 const (
@@ -74,7 +74,7 @@ type AddrPort struct {
 	Addr []byte
 	Port uint16
 
-	// One of "tcp" and "udp", [AddrPort.Network] relies on this field. 
+	// One of "tcp" and "udp", [AddrPort.Network] relies on this field.
 	Protocol string
 }
 
@@ -85,22 +85,22 @@ func readAddrPort(reader io.Reader) (*AddrPort, error) {
 	if err != nil {
 		return nil, err
 	}
-	var content []byte
+	var addr []byte
 	switch atyp {
 	case ATYPV4:
-		content = make([]byte, 4)
+		addr = make([]byte, 4)
 	case ATYPV6:
-		content = make([]byte, 16)
+		addr = make([]byte, 16)
 	case ATYPDOMAIN:
 		l, err := readByte(reader)
 		if err != nil {
 			return nil, err
 		}
-		content = make([]byte, l)
+		addr = make([]byte, l)
 	default:
 		return nil, ATYPNotSupportedError(atyp)
 	}
-	if _, err := io.ReadFull(reader, content); err != nil {
+	if _, err := io.ReadFull(reader, addr); err != nil {
 		return nil, err
 	}
 	port, err := readUInt16BigEndian(reader)
@@ -109,16 +109,21 @@ func readAddrPort(reader io.Reader) (*AddrPort, error) {
 	}
 	return &AddrPort{
 		Type: atyp,
-		Addr: content,
+		Addr: addr,
 		Port: port,
 	}, nil
 }
 
+// ParseAddrPort parses s to [AddrPort].
+// If s is not a valid IP address, ParseAddrPort will try parse it
+// as <host name>:<port>, WITHOUT syntax checking on the host name.
+//
+// In the returned [AddrPort], [AddrPort.Protocol] will be empty.
 func ParseAddrPort(s string) (*AddrPort, error) {
 	a := new(AddrPort)
 	ipPort, err := netip.ParseAddrPort(s)
 
-	if err != nil {
+	if err != nil { // then consider it a domain name
 		host, portS, err := net.SplitHostPort(s)
 		if err != nil {
 			return nil, err
@@ -146,6 +151,7 @@ func ParseAddrPort(s string) (*AddrPort, error) {
 }
 
 // Network returns the network of a.
+// If a is nil, "<nil>" is returned.
 // If a.Type is one of [ATYPV4] or [ATYPV6],
 // Network will append "4" or "6" to a.Protocol accordingly.
 // If a.Type is [ATYPDOMAIN], Network will just return a.Protocol.
@@ -174,7 +180,9 @@ func (a *AddrPort) String() string {
 	return net.JoinHostPort(host, portStr)
 }
 
+// Host returns the string form of a, without the port part.
 func (a *AddrPort) Host() string {
+	// Although actually String relies on Host, lol
 	if a == nil {
 		return "<nil>"
 	}
@@ -184,7 +192,7 @@ func (a *AddrPort) Host() string {
 	if a.Type == ATYPDOMAIN {
 		return string(a.Addr)
 	}
-	return fmt.Sprintf("%02X", a.Addr)
+	return fmt.Sprintf("0x%02X", a.Addr)
 }
 
 // Equal tests whether a and x are the same address,
@@ -198,7 +206,7 @@ func (a *AddrPort) Equal(x *AddrPort) bool {
 		return true
 	}
 
-	return a.Type == x.Type && reflect.DeepEqual(a.Addr, x.Addr) && a.Port == x.Port
+	return a.Type == x.Type && a.Port == x.Port && reflect.DeepEqual(a.Addr, x.Addr)
 }
 
 func (a *AddrPort) cpy() *AddrPort {
@@ -253,7 +261,7 @@ type Handshake struct {
 	raddr        net.Addr
 	uuid         uuid.UUID
 
-	wg          *sync.WaitGroup
+	wg          *sync.WaitGroup // TODO Why references??
 	once        *sync.Once
 	neg         Subnegotiator
 	timeoutDeny bool
@@ -284,27 +292,27 @@ func readHandshake(reader io.Reader) (*Handshake, error) {
 	return hs, nil
 }
 
-// Accept accepts the handshake, but also instead denies the request silently
+// Accept accepts the handshake, but also instead denies the request
 // if params are invalid, e.g. when method is MethodNoAccepted.
 //
 // Can be called only once, furthur calls are no-op.
-func (r *Handshake) Accept(method byte, neg Subnegotiator) (ok bool) {
+func (hs *Handshake) Accept(method byte, neg Subnegotiator) (ok bool) {
 	if neg == nil || method == MethodNoAccepted {
-		r.deny(false)
+		hs.deny(false)
 		return
 	}
-	if isByteOneOf(method, r.methods...) {
-		return r.accept(method, neg)
+	if isByteOneOf(method, hs.methods...) {
+		return hs.accept(method, neg)
 	}
-	r.deny(false)
+	hs.deny(false)
 	return
 }
 
-func (r *Handshake) accept(method byte, neg Subnegotiator) (ok bool) {
-	r.once.Do(func() {
-		r.methodChosen = method
-		r.neg = neg
-		r.wg.Done()
+func (hs *Handshake) accept(method byte, neg Subnegotiator) (ok bool) {
+	hs.once.Do(func() {
+		hs.methodChosen = method
+		hs.neg = neg
+		hs.wg.Done()
 		ok = true
 	})
 	return
@@ -313,35 +321,35 @@ func (r *Handshake) accept(method byte, neg Subnegotiator) (ok bool) {
 // Deny denies the handshake by returning NO ACCEPTABLE METHODS.
 //
 // Can be called only once, furthur calls are no-op.
-func (r *Handshake) Deny() (ok bool) {
-	return r.deny(false)
+func (hs *Handshake) Deny() (ok bool) {
+	return hs.deny(false)
 }
 
-func (r *Handshake) deny(timeoutDeny bool) (ok bool) {
-	r.once.Do(func() {
-		r.methodChosen = MethodNoAccepted
-		r.timeoutDeny = timeoutDeny
-		r.wg.Done()
+func (hs *Handshake) deny(timeoutDeny bool) (ok bool) {
+	hs.once.Do(func() {
+		hs.methodChosen = MethodNoAccepted
+		hs.timeoutDeny = timeoutDeny
+		hs.wg.Done()
 		ok = true
 	})
 	return
 }
 
 // Methods returns client's supported auth methods.
-// Methods might return no method,
+// Methods might return 0 method,
 // or include method code 0xFF if the client did send so.
-func (r *Handshake) Methods() []byte {
-	s := make([]byte, len(r.methods))
-	copy(s, r.methods)
+func (hs *Handshake) Methods() []byte {
+	s := make([]byte, len(hs.methods))
+	copy(s, hs.methods)
 	return s
 }
 
-func (r *Handshake) LocalAddr() net.Addr {
-	return r.laddr
+func (hs *Handshake) LocalAddr() net.Addr {
+	return hs.laddr
 }
 
-func (r *Handshake) RemoteAddr() net.Addr {
-	return r.raddr
+func (hs *Handshake) RemoteAddr() net.Addr {
+	return hs.raddr
 }
 
 // UUID returns the UUID of the session of hs.
@@ -354,16 +362,19 @@ func (hs *Handshake) UUID() uuid.UUID {
 }
 
 // A Request represents a client request.
-// Use [ConnectRequest] e.t.c. for manipulation.
+// Use [ConnectRequest], [BindRequest] and [AssocRequest] for handling.
 //
-// All different types of requests can be accepted / denied only once. Furthur
-// calls are no-op and return ok with false.
+// Accept / Deny methods of different request types can be called only once.
+// Furthur calls are no-op and return ok being false.
 //
-// Requests are denied silently if params passed to Accept funcs are invalid, e.g.
-// addr string doesn't contain a port number, net.Addr returned by conn is invalid.
+// Requests are denied if params passed to Accept funcs are invalid, e.g.
+// addr string doesn't contain a port number,
+// net.Addr returned by conn params is invalid.
+// However, port 0 is considered valid and will be sent as is.
 //
 // A Request will be denied automatically if it's not accepted or denied
-// after [PeriodAutoDeny].
+// after [PeriodAutoDeny], with exception being [BindRequest], see
+// [BindRequest.Bind].
 type Request struct {
 	cmd byte
 	dst *AddrPort
@@ -373,8 +384,8 @@ type Request struct {
 
 	raddr       net.Addr
 	laddr       net.Addr
-	once        *sync.Once
-	wg          *sync.WaitGroup
+	once        *sync.Once      // We use references here because Request will be value-copied.
+	wg          *sync.WaitGroup // See the request wrapping part in MidLayer.ServeClient.
 	reply       *reply
 	timeoutDeny bool
 }
@@ -431,7 +442,7 @@ func (r *Request) Dst() *AddrPort {
 // If rep is RepSucceeded, it's replaced by RepGeneralFailure.
 //
 // addr is used for BND fields. If addr is invalid, BND.ADDR
-// will be set to empty domain name, and BND.PORT set to 0.
+// will be set to empty domain name, and BND.PORT will be set to 0.
 func (r *Request) Deny(rep byte, addr string) (ok bool) {
 	a, err := ParseAddrPort(addr)
 
@@ -475,8 +486,6 @@ type ConnectRequest struct {
 	outbound net.Conn
 }
 
-// Accept accepts the request, and starts proxying.
-// Port 0 is valid and will be sent as-is.
 func (r *ConnectRequest) Accept(conn net.Conn) (ok bool) {
 	if conn == nil || conn.LocalAddr() == nil {
 		r.deny(RepGeneralFailure, emptyAddr.cpy(), false)
@@ -511,10 +520,6 @@ type BindRequest struct {
 
 // Accept accepts the request, and tells the client which address the SOCKS server
 // will listen on. This is the first reply from the server.
-//
-// Note that [MidLayer] doesn't actually listens it for you. You can implement a
-// listener yourself or use Binder.
-// Port 0 is valid and will be sent as-is.
 func (r *BindRequest) Accept(addr string) (ok bool) {
 	a, err := ParseAddrPort(addr)
 	if err != nil {
@@ -538,9 +543,11 @@ func (r *BindRequest) accept(addr *AddrPort) (ok bool) {
 
 // Bind binds the client. This is the second reply from the server.
 //
-// No-op if the first reply is not decided.
-// Request is denied if conn is nil.
-// Port 0 is valid and will be sent as-is.
+// No-op if the first reply is not decided, once it is, Bind can be called again.
+//
+// Once r is accepted,
+// r will wait for the decision on the second reply WITHOUT timeout,
+// even if the connection to the client is closed.
 func (r *BindRequest) Bind(conn net.Conn) (ok bool) {
 	r.bindMux.Lock()
 	defer r.bindMux.Unlock()
@@ -564,6 +571,7 @@ func (r *BindRequest) bind(conn net.Conn, addr *AddrPort) (ok bool) {
 	r.bindOnce.Do(func() {
 		r.hostConn = conn
 		r.bindReply = new(reply)
+		r.bindReply.code = RepSucceeded
 		r.bindReply.addr = addr
 		ok = true
 	})
@@ -571,7 +579,7 @@ func (r *BindRequest) bind(conn net.Conn, addr *AddrPort) (ok bool) {
 }
 
 // DenyBind denies the request.
-// No-op if the first reply is not decided.
+// No-op if the first reply is not decided, once it is, DenyBind can be called again.
 func (r *BindRequest) DenyBind(rep byte, addr string) (ok bool) {
 	r.bindMux.Lock()
 	defer r.bindMux.Unlock()
@@ -608,7 +616,9 @@ type AssocRequest struct {
 	notifyOnce sync.Once
 	notify     func(error)
 	terminate  func() error
-	finalErr   error
+  // The true reason why the association is terminated. 
+  // See Midlayer.handleAssoc and AssocRequest.Accept. 
+	finalErr   error 
 }
 
 // Accept accepts the request.
@@ -618,15 +628,10 @@ type AssocRequest struct {
 //
 // notify is called when the association terminates, e.g. TCP disconnection,
 // IO error, call on terminate.
-// If client closed the control connection, reason will be [io.EOF].
+// If the client closed the control connection, reason will be [io.EOF].
 // If terminate is called, reason will be nil.
-// Otherwise, reason will be read error on the control connection.
+// Otherwise, reason will be the read error on the control connection.
 // notify will only be called once, if it's not nil.
-//
-// Note that [MidLayer] doesn't actually relays the UDP traffic.
-// Implement a relay yourself, or use [Associator].
-//
-// Port 0 is valid and will be sent as-is.
 func (r *AssocRequest) Accept(addr string, notify func(reason error)) (terminate func() error, ok bool) {
 	a, err := ParseAddrPort(addr)
 	if err != nil {
@@ -649,7 +654,7 @@ func (r *AssocRequest) accept(addr *AddrPort, notify func(error)) (terminate fun
 }
 
 type reply struct {
-	code  byte
+	code byte
 	addr *AddrPort
 }
 
@@ -665,6 +670,7 @@ func (r *reply) MarshalBinary() (data []byte, err error) {
 	return data, nil
 }
 
+// Used in Associator
 type udpPacket struct {
 	frag byte
 	dst  *AddrPort
@@ -672,8 +678,8 @@ type udpPacket struct {
 }
 
 func (p *udpPacket) UnmarshalBinary(data []byte) error {
-  // We use ErrMalformed here instead of specific err type, because 
-  // the packet will be dropped by Associator silently. 
+	// We use ErrMalformed here instead of specific err type, because
+	// the packet will be dropped by Associator silently.
 	if len(data) < 3 {
 		return ErrMalformed
 	}
@@ -686,9 +692,6 @@ func (p *udpPacket) UnmarshalBinary(data []byte) error {
 	}
 	dst, err := readAddrPort(r)
 	if err != nil {
-		if err == io.EOF {
-			err = ErrMalformed
-		}
 		return err
 	}
 	dst.Protocol = "udp"
