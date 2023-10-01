@@ -34,19 +34,19 @@ type Binder struct {
 // Handle handles the BND request, blocks until error or successful bind.
 // It can be called simultainously.
 //
-// laddr represents the address to listen at, and it can be empty,
+// addr represents the address to listen at, and it can be empty,
 // in this case Handle will listen on 0.0.0.0 and :: with one single
 // system allocated port.
-// If the host part in laddr is a host name,
+// If the host part in addr is a host name,
 // Handle will resolve it to IP addresses and listen on all of them.
-// If the port in laddr is 0,
+// If the port in addr is 0,
 // Handle will try to use one single system allocated port for all of them.
 //
 // Handle doesn't wait for the data transmission after the 2nd reply to finish.
 // If restrict is true, only inbound specified in the request will be accepted.
 //
 // timeout is disabled if it's 0.
-func (b *Binder) Handle(req *BindRequest, laddr string, timeout time.Duration) error {
+func (b *Binder) Handle(req *BindRequest, addr string, timeout time.Duration) error {
 	cancel := make(chan struct{})
 	if timeout != 0 {
 		time.AfterFunc(timeout, func() {
@@ -62,6 +62,7 @@ func (b *Binder) Handle(req *BindRequest, laddr string, timeout time.Duration) e
 
 	dstIPs, err := net.LookupIP(req.Dst().Host())
 	if err != nil {
+		req.Deny(RepGeneralFailure, "")
 		return err
 	}
 
@@ -72,7 +73,7 @@ func (b *Binder) Handle(req *BindRequest, laddr string, timeout time.Duration) e
 	default:
 	}
 
-	dispatchers, err := b.getDispatchers(laddr)
+	dispatchers, err := b.getDispatchers(addr)
 	if err != nil {
 		req.Deny(RepGeneralFailure, "")
 		return err
@@ -89,13 +90,22 @@ func (b *Binder) Handle(req *BindRequest, laddr string, timeout time.Duration) e
 		conn = <-connChan
 		close(ready)
 	}()
+  err = nil
 	for _, l := range dispatchers {
 		for _, ip := range dstIPs {
 			addr := net.JoinHostPort(ip.String(), port)
-			l.subscribe(addr, connChan, errChan)
+      if existed := l.subscribe(addr, connChan, errChan); existed {
+        err = ErrDuplicatedRequest
+        continue
+      }
 			defer l.unsubscribe(addr)
 		}
 	}
+
+  if err != nil {
+    req.Deny(RepGeneralFailure, "")
+    return err
+  }
 
 	if ok := req.Accept(net.JoinHostPort(b.Hostname, port)); !ok {
 		return ErrAcceptOrDenyFailed
@@ -157,14 +167,13 @@ func (b *Binder) getDispatchers(addr string) ([]*tcpDispatcher, error) {
 	newDispatchers := make([]*tcpDispatcher, 0, 4)
 	var err error
 	for _, ip := range ips {
-		d := b.dispatchers[addr]
+		d := b.dispatchers[net.JoinHostPort(ip.String(), port)]
 		if d != nil {
 			result = append(result, d)
 			continue
 		}
 		var l net.Listener
-		laddr := net.JoinHostPort(ip.String(), port)
-		l, err = net.Listen("tcp", laddr)
+		l, err = net.Listen("tcp", net.JoinHostPort(ip.String(), port))
 		if err != nil {
 			break
 		}
@@ -205,18 +214,24 @@ type tcpDispatcher struct {
 	binder         *Binder
 }
 
-func (d *tcpDispatcher) subscribe(addr string, connChan chan<- net.Conn, errChan chan<- error) {
+func (d *tcpDispatcher) subscribe(addr string, connChan chan<- net.Conn, errChan chan<- error) (existed bool) {
 	d.mux.Lock()
 	defer d.mux.Unlock()
+  if ch := d.connChanByAddr[addr]; ch != nil {
+    return true
+  }
 	d.connChanByAddr[addr] = connChan
 	d.errChanByAddr[addr] = errChan
+  return false
 }
 
 func (d *tcpDispatcher) unsubscribe(addr string) {
 	d.mux.Lock()
 	defer d.mux.Unlock()
 	delete(d.connChanByAddr, addr)
+	delete(d.errChanByAddr, addr)
 	if len(d.connChanByAddr) == 0 {
+    d.listener.Close()
 		delete(d.binder.dispatchers, d.listener.Addr().String())
 	}
 }

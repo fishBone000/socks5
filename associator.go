@@ -1,16 +1,12 @@
 package socksy5
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"runtime"
+	"strconv"
 	"sync"
 )
-
-// ErrAlreadyRelaying is returned by [Associator.Handle] and indicates that
-// the [Associator] is already relaying for that client.
-var ErrAlreadyRelaying = errors.New("already relaying for that client")
 
 // Associator relays UDP packets for UDP ASSOCIATE requests.
 //
@@ -29,9 +25,10 @@ type Associator struct {
 
 // Handle handles the UDP ASSOCIATE request req.
 //
-// addr is the address that a will listen for and send UDP packets
-// to the client. It can be empty, in that case a will use
-// all zero addresses with a system allocated port.
+// addr is the address that a will listen for UDP packets from the client 
+// and send UDP packets to the client. 
+// It can be empty, 
+// in that case a will use all zero addresses with a system allocated port.
 // If the host part in addr is a host name, Handle will look it up and listen
 // on all of the resulting IP addresses. If the port in addr is 0,
 // a system allocated port will be chosen. Note that if a host name is
@@ -44,6 +41,12 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 		a.dispatchers = make(map[string]*udpDispatcher)
 	}
 	a.mux.Unlock()
+
+	dstIPs, err := net.LookupIP(req.Dst().Host())
+	if err != nil {
+		req.Deny(RepGeneralFailure, "")
+		return err
+	}
 
 	conn, err := net.ListenUDP("udp", new(net.UDPAddr))
 	if err != nil {
@@ -59,14 +62,22 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 
 	rawChan := make(chan []byte, 32)
 	errChan := make(chan error)
+  err = nil
 	for _, d := range ds {
-		existed := d.subscribe(req.Dst().String(), rawChan, errChan)
-		if existed {
-			req.Deny(RepGeneralFailure, "")
-			return ErrAlreadyRelaying
-		}
-		defer d.unsubscribe(req.Dst().String())
+    for _, ip := range dstIPs {
+      existed := d.subscribe(net.JoinHostPort(ip.String(), strconv.Itoa(int(req.Dst().Port))), rawChan, errChan)
+      if existed {
+        err = ErrDuplicatedRequest
+        continue
+      }
+      defer d.unsubscribe(req.Dst().String())
+    }
 	}
+
+  if err != nil {
+    req.Deny(RepGeneralFailure, "")
+    return err
+  }
 
 	_, port, err := net.SplitHostPort(ds[0].conn.LocalAddr().String())
 	if err != nil {
@@ -227,7 +238,7 @@ func (a *Associator) getDispatchers(addr string) ([]*udpDispatcher, error) {
 
 	for _, d := range newDispatchers {
 		a.dispatchers[d.conn.LocalAddr().String()] = d
-    go d.run()
+		go d.run()
 	}
 
 	return result, nil
@@ -309,15 +320,15 @@ func (d *udpDispatcher) run() {
 		n, addr, err := d.conn.ReadFromUDPAddrPort(buffer)
 
 		d.mux.RLock()
-    if n > 0 {
-      ch := d.rawChanByAddr[addr.String()]
-      if ch != nil {
-        select {
-        case ch <- buffer[:n]:
-        default:
-        }
-      }
-    }
+		if n > 0 {
+			ch := d.rawChanByAddr[addr.String()]
+			if ch != nil {
+				select {
+				case ch <- buffer[:n]:
+				default:
+				}
+			}
+		}
 		d.mux.RUnlock()
 
 		if err != nil {

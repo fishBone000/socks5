@@ -47,7 +47,7 @@ func (e CmdNotSupportedError) Is(target error) bool {
 
 // Unwrap returns [errors.ErrUnsupported].
 func (e CmdNotSupportedError) Unwrap() error {
-  return errors.ErrUnsupported
+	return errors.ErrUnsupported
 }
 
 type ATYPNotSupportedError byte
@@ -63,12 +63,17 @@ func (e ATYPNotSupportedError) Is(target error) bool {
 
 // Unwrap returns [errors.ErrUnsupported].
 func (e ATYPNotSupportedError) Unwrap() error {
-  return errors.ErrUnsupported
+	return errors.ErrUnsupported
 }
 
 // ErrAcceptOrDenyFailed is used by [Connect], [Binder] and [Associator].
 // It indicates that the accept and deny methods of the request returned not ok.
 var ErrAcceptOrDenyFailed = errors.New("request already handled")
+
+// ErrDuplicatedRequest is returned by [Associator.Handle] and [Binder.Handle]
+// indicating that another request with same parameters is being handled,
+// e.g. the [Binder] is already listening the address stated by the BIND request.
+var ErrDuplicatedRequest = errors.New("duplicated request with same parameters")
 
 // An OpError contains Op string describing in which operation has the error occured.
 // Currently the error util of socksy5 is not well designed, so OpError is for now
