@@ -1,8 +1,6 @@
 package socksy5
 
 import (
-	"errors"
-	"fmt"
 	"net"
 	"os"
 	"runtime"
@@ -11,8 +9,6 @@ import (
 )
 
 // Binder handles the BND requests.
-// It has basic features, thus you need to implement a handling mechanism yourself
-// if Binder doesn't suit your need.
 //
 // Binder can listen for inbounds for different requests on the same port.
 // Thus it is totally ok if you want to handle for multiple requests on one
@@ -20,9 +16,6 @@ import (
 // any inbound on a port, the listener on that port will be closed,
 // and will only be created again when next time Binder is required to listen
 // on that port.
-//
-// Binders and [MidLayer] don't share port registry,
-// so port usage conflicts among them is possible.
 //
 // Currently if req is to be denied, only [RepGeneralFailure]
 // will be replied.
@@ -33,10 +26,9 @@ type Binder struct {
 	// be IP addresses, but a host name is considered valid here.
 	// Do not modify this field when Binder is running.
 	Hostname string
-	hostname *AddrPort
 
-	mux       sync.Mutex
-	listeners map[string]*bindListener
+	mux         sync.Mutex
+	dispatchers map[string]*tcpDispatcher
 }
 
 // Handle handles the BND request, blocks until error or successful bind.
@@ -45,16 +37,16 @@ type Binder struct {
 // laddr represents the address to listen at, and it can be empty,
 // in this case Handle will listen on 0.0.0.0 and :: with one single
 // system allocated port.
-// If laddr is a host name,
+// If the host part in laddr is a host name,
 // Handle will resolve it to IP addresses and listen on all of them.
 // If the port in laddr is 0,
 // Handle will try to use one single system allocated port for all of them.
 //
-// Upon return, if req is not accepted / denied in other goroutines,
-// req will be accepted or denied accordingly and both 2 BND replies will be sent.
-// Handle doesn't wait for all later transmission after 2nd reply to finish.
+// Handle doesn't wait for the data transmission after the 2nd reply to finish.
 // If restrict is true, only inbound specified in the request will be accepted.
-func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, timeout time.Duration) error {
+//
+// timeout is disabled if it's 0.
+func (b *Binder) Handle(req *BindRequest, laddr string, timeout time.Duration) error {
 	cancel := make(chan struct{})
 	if timeout != 0 {
 		time.AfterFunc(timeout, func() {
@@ -63,244 +55,198 @@ func (b *Binder) Handle(req *BindRequest, laddr string, restrict bool, timeout t
 	}
 
 	b.mux.Lock()
-	if b.listeners == nil {
-		b.listeners = make(map[string]*bindListener)
-	}
-	if b.hostname == nil {
-		b.hostname = parseHostToAddrPort(b.Hostname)
-		b.hostname.Protocol = "tcp"
+	if b.dispatchers == nil {
+		b.dispatchers = make(map[string]*tcpDispatcher)
 	}
 	b.mux.Unlock()
 
-	var laddrIPs []net.IP
+	dstIPs, err := net.LookupIP(req.Dst().Host())
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-cancel:
+		req.Deny(RepGeneralFailure, "")
+		return os.ErrDeadlineExceeded
+	default:
+	}
+
+	dispatchers, err := b.getDispatchers(laddr)
+	if err != nil {
+		req.Deny(RepGeneralFailure, "")
+		return err
+	}
+
+	_, port, _ := net.SplitHostPort(dispatchers[0].listener.Addr().String())
+
+	ready := make(chan struct{})
+	var conn net.Conn
+	connChan := make(chan net.Conn)
+	errChan := make(chan error)
+	defer close(connChan)
+	go func() {
+		conn = <-connChan
+		close(ready)
+	}()
+	for _, l := range dispatchers {
+		for _, ip := range dstIPs {
+			addr := net.JoinHostPort(ip.String(), port)
+			l.subscribe(addr, connChan, errChan)
+			defer l.unsubscribe(addr)
+		}
+	}
+
+	if ok := req.Accept(net.JoinHostPort(b.Hostname, port)); !ok {
+		return ErrAcceptOrDenyFailed
+	}
+
+  err = nil
+	select {
+	case <-cancel:
+    err = os.ErrDeadlineExceeded
+  case err = <-errChan:
+	case <-ready:
+	}
+
+  if err != nil {
+		go func() {
+			<-ready
+			if conn != nil {
+				conn.Close()
+			}
+		}()
+		req.Deny(RepGeneralFailure, "")
+    return err
+  }
+
+	if ok := req.Bind(conn); !ok {
+		return ErrAcceptOrDenyFailed
+	}
+
+	return nil
+}
+
+func (b *Binder) getDispatchers(addr string) ([]*tcpDispatcher, error) {
+	var ips []net.IP
 	var port string
-	if laddr == "" {
+	if addr == "" {
 		if runtime.GOOS == "dragonfly" || runtime.GOOS == "openbsd" {
-			laddrIPs = []net.IP{net.IPv4zero, net.IPv6zero}
+			ips = []net.IP{net.IPv4zero, net.IPv6zero}
 		} else {
-			laddrIPs = []net.IP{net.IPv4zero}
+			ips = []net.IP{net.IPv4zero}
 		}
 		port = "0"
 	} else {
 		var host string
 		var err error
-		host, port, err = net.SplitHostPort(laddr)
+		host, port, err = net.SplitHostPort(addr)
 		if err != nil {
-			req.Deny(RepGeneralFailure, "")
-			return err
+			return nil, err
 		}
 
-		laddrIPs, err = net.LookupIP(host)
-		ok := true
-		select {
-		case _, ok = <-cancel:
-		default:
-		}
+		ips, err = net.LookupIP(host)
 		if err != nil {
-			req.Deny(RepGeneralFailure, "")
-			return err
-		}
-		if !ok {
-			req.Deny(RepGeneralFailure, "")
-			return os.ErrDeadlineExceeded
+			return nil, err
 		}
 	}
 
-	sub := &bindSubscriber{
-		connChan: make(chan net.Conn),
-		dstAddr:  req.dst.String(),
-		restrict: restrict,
-	}
-	listeners, err := b.getListeners(laddrIPs, port, sub)
-	if err != nil {
-		req.Deny(RepGeneralFailure, "")
-		return err
-	}
-
-	sub.listeners = listeners
-	for _, l := range listeners {
-		l.subscribe(sub)
-	}
-	defer sub.cleanup()
-
-	_, lport, err := net.SplitHostPort(listeners[0].laddr)
-	if err != nil {
-		req.Deny(RepGeneralFailure, "")
-		return fmt.Errorf("impossible bug! %w", err)
-	}
-
-	var ok bool
-	bndAddr := b.hostname.cpy()
-	if bndAddr.Port, err = parseUint16(lport); err != nil {
-		req.Deny(RepGeneralFailure, "")
-		return fmt.Errorf("impossible bug! parse %s failed: %w", listeners[0].laddr, err)
-	}
-
-	if ok := req.Accept(bndAddr.String()); !ok {
-		return ErrAcceptOrDenyFailed
-	}
-
-	var conn net.Conn
-	ok = true
-	select {
-	case conn = <-sub.connChan:
-	case _, ok = <-cancel:
-	}
-	if !ok {
-		req.DenyBind(RepGeneralFailure, "")
-		return os.ErrDeadlineExceeded
-	}
-	if ok := req.Bind(conn); !ok {
-		return ErrAcceptOrDenyFailed
-	}
-	return nil
-}
-
-func (b *Binder) getListeners(ips []net.IP, port string, sub *bindSubscriber) ([]*bindListener, error) {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-
-	addrOfNewListeners := make([]net.IP, 0, 4)
-	result := make([]*bindListener, 0, len(ips))
+	result := make([]*tcpDispatcher, 0, len(ips))
+	newDispatchers := make([]*tcpDispatcher, 0, 4)
 	var err error
 	for _, ip := range ips {
-		addr := net.JoinHostPort(ip.String(), port)
-		bndListener := b.listeners[addr]
-		if bndListener == nil {
-			addrOfNewListeners = append(addrOfNewListeners, ip)
-		} else {
-			result = append(result, bndListener)
+		d := b.dispatchers[addr]
+		if d != nil {
+			result = append(result, d)
+			continue
+		}
+		var l net.Listener
+		laddr := net.JoinHostPort(ip.String(), port)
+		l, err = net.Listen("tcp", laddr)
+		if err != nil {
+			break
+		}
+		d = &tcpDispatcher{
+			listener:       l,
+			connChanByAddr: make(map[string]chan<- net.Conn),
+			errChanByAddr:  make(map[string]chan<- error),
+			binder:         b,
+			mux:            &b.mux,
+		}
+		result = append(result, d)
+		newDispatchers = append(newDispatchers, d)
+		if port == "0" {
+			_, port, _ = net.SplitHostPort(l.Addr().String())
 		}
 	}
 
-	newListeners, err := listenMultipleTCP(addrOfNewListeners, port)
 	if err != nil {
+		for _, d := range newDispatchers {
+			d.listener.Close()
+		}
 		return nil, err
 	}
 
-	for _, l := range newListeners {
-		bndListener := &bindListener{
-			inner:  l,
-			binder: b,
-			laddr:  l.Addr().String(),
-		}
-		b.listeners[bndListener.laddr] = bndListener
-		result = append(result, bndListener)
-		go bndListener.run()
+	for _, d := range newDispatchers {
+		b.dispatchers[d.listener.Addr().String()] = d
+		go d.run()
 	}
 
 	return result, nil
 }
 
-func (b *Binder) parseLocalAddr() {
+type tcpDispatcher struct {
+	listener       net.Listener
+	connChanByAddr map[string]chan<- net.Conn
+	errChanByAddr  map[string]chan<- error
+	mux            *sync.Mutex
+	binder         *Binder
 }
 
-type bindListener struct {
-	inner       net.Listener
-	closed      bool
-	subscribers map[string]*bindSubscriber
-	mux         sync.Mutex
-	binder      *Binder
-	laddr       string
+func (d *tcpDispatcher) subscribe(addr string, connChan chan<- net.Conn, errChan chan<- error) {
+	d.mux.Lock()
+	defer d.mux.Unlock()
+	d.connChanByAddr[addr] = connChan
+	d.errChanByAddr[addr] = errChan
 }
 
-// Must subscribe before listen to make map beforehand.
-func (bl *bindListener) listen(addr string, b *Binder) (err error) {
-	bl.binder = b
-
-	bl.inner, err = net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-
-	actualAddr := bl.inner.Addr()
-	if actualAddr == nil {
-		return errors.New("listener address is unknown(nil)")
-	}
-
-	bl.laddr = actualAddr.String()
-	return nil
-}
-
-func (bl *bindListener) subscribe(s *bindSubscriber) {
-	bl.mux.Lock()
-	defer bl.mux.Unlock()
-	if bl.subscribers == nil {
-		bl.subscribers = make(map[string]*bindSubscriber)
-	}
-	bl.subscribers[s.dstAddr] = s
-}
-
-func (bl *bindListener) unsubscribe(s *bindSubscriber) {
-	bl.mux.Lock()
-	delete(bl.subscribers, s.dstAddr)
-	bl.mux.Unlock()
-
-	if len(bl.subscribers) == 0 {
-		bl.Close()
+func (d *tcpDispatcher) unsubscribe(addr string) {
+	d.mux.Lock()
+	defer d.mux.Unlock()
+	delete(d.connChanByAddr, addr)
+	if len(d.connChanByAddr) == 0 {
+		delete(d.binder.dispatchers, d.listener.Addr().String())
 	}
 }
 
-func (bl *bindListener) run() {
+func (d *tcpDispatcher) run() {
 	for {
-		conn, err := bl.inner.Accept()
+		conn, err := d.listener.Accept()
+
+		d.mux.Lock()
+
 		if err != nil {
-			bl.Close()
+			for _, errChan := range d.errChanByAddr {
+				select {
+				case errChan <- err:
+				default:
+				}
+			}
+			d.mux.Unlock()
 			return
 		}
 
-		sent := false
-		bl.mux.Lock()
-		for _, s := range bl.subscribers {
-			if !s.restrict || s.dstAddr == conn.RemoteAddr().String() {
-				s.connChan <- conn // bindSubscriber.connChan shall not block
-				sent = true
-				break
+		if connChan := d.connChanByAddr[conn.RemoteAddr().String()]; connChan != nil {
+			select {
+			case connChan <- conn:
+				d.mux.Unlock()
+				continue
+			default:
 			}
 		}
-		bl.mux.Unlock()
-
-		if !sent {
-			conn.Close()
-		}
-	}
-}
-
-func (bl *bindListener) Close() {
-	bl.mux.Lock()
-	defer bl.mux.Unlock()
-	if bl.closed {
-		return
-	}
-	bl.closed = true
-
-	bl.binder.mux.Lock()
-	defer bl.binder.mux.Unlock()
-
-	delete(bl.binder.listeners, bl.laddr)
-
-	bl.inner.Close()
-}
-
-type bindSubscriber struct {
-	connChan  chan net.Conn // bindSubscriber.connChan shall not block
-	dstAddr   string
-	restrict  bool
-	listeners []*bindListener
-}
-
-func (bs *bindSubscriber) cleanup() {
-	for _, l := range bs.listeners {
-		l.unsubscribe(bs)
-	}
-
-Loop:
-	for {
-		select {
-		case conn := <-bs.connChan:
-			conn.Close()
-		default:
-			break Loop
-		}
+		conn.Close()
+		d.mux.Unlock()
 	}
 }

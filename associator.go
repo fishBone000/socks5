@@ -13,8 +13,6 @@ import (
 var ErrAlreadyRelaying = errors.New("already relaying for that client")
 
 // Associator relays UDP packets for UDP ASSOCIATE requests.
-// It has basic functionality, thus if it doesn't suit your need, you need
-// to implement a relayer yourself.
 //
 // All methods of Associator can be called simultaneously.
 type Associator struct {
@@ -32,11 +30,11 @@ type Associator struct {
 // Handle handles the UDP ASSOCIATE request req.
 //
 // addr is the address that a will listen for and send UDP packets
-// from and to client. It can be empty, in that case a will use
+// to the client. It can be empty, in that case a will use
 // all zero addresses with a system allocated port.
-// If the host in addr is FQDN, Handle will look it up and listen
+// If the host part in addr is a host name, Handle will look it up and listen
 // on all of the resulting IP addresses. If the port in addr is 0,
-// a system allocated port will be chosen. Note that if FQDN is
+// a system allocated port will be chosen. Note that if a host name is
 // used in addr, Handle will duplicate host-to-client UDP packets
 // and send them out using all of the IP addresses associated with
 // the FQDN.
@@ -229,6 +227,7 @@ func (a *Associator) getDispatchers(addr string) ([]*udpDispatcher, error) {
 
 	for _, d := range newDispatchers {
 		a.dispatchers[d.conn.LocalAddr().String()] = d
+    go d.run()
 	}
 
 	return result, nil
