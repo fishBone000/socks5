@@ -1,4 +1,4 @@
-# Under Construction, Preview ONLY, Will Be Out SOON
+# Under Test, Preview ONLY, Will Be Out SOON
 # SOCKSY5
 Socksy5 provides a Golang SOCKS5 middle layer that handle communication with clients 
 for you, but let you to do decision on what to do with the handshakes and requests. 
