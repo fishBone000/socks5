@@ -8,8 +8,6 @@ import (
 	"sync"
 )
 
-var errDispatcherDown = errors.New("dispatcher down")
-
 // ErrAlreadyRelaying is returned by [Associator.Handle] and indicates that
 // the [Associator] is already relaying for that client.
 var ErrAlreadyRelaying = errors.New("already relaying for that client")
@@ -28,15 +26,14 @@ type Associator struct {
 	Hostname string
 
 	dispatchers map[string]*udpDispatcher
-
-	mux sync.RWMutex
+	mux         sync.RWMutex
 }
 
 // Handle handles the UDP ASSOCIATE request req.
 //
 // addr is the address that a will listen for and send UDP packets
 // from and to client. It can be empty, in that case a will use
-// all zero addresses with system allocated port.
+// all zero addresses with a system allocated port.
 // If the host in addr is FQDN, Handle will look it up and listen
 // on all of the resulting IP addresses. If the port in addr is 0,
 // a system allocated port will be chosen. Note that if FQDN is
@@ -62,7 +59,7 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 		return err
 	}
 
-	rawChan := make(chan []byte, 8)
+	rawChan := make(chan []byte, 32)
 	errChan := make(chan error)
 	for _, d := range ds {
 		existed := d.subscribe(req.Dst().String(), rawChan, errChan)
@@ -122,8 +119,8 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 		}
 	}()
 	// Relay UDP to client
-	buffer := make([]byte, 65535)
 	go func() {
+		buffer := make([]byte, 65535)
 		for {
 			n, src, err := conn.ReadFrom(buffer)
 			if n > 0 {
@@ -144,7 +141,7 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 					continue
 				}
 				for _, d := range ds {
-					d.WriteTo(raw, req.Dst())
+					go d.WriteTo(raw, req.Dst())
 				}
 			}
 
@@ -160,7 +157,7 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 
 	err = <-errChan
 	close(stop)
-	return nil
+	return err
 }
 
 func (a *Associator) getDispatchers(addr string) ([]*udpDispatcher, error) {
@@ -241,6 +238,12 @@ func (a *Associator) deregisterNoLock(addr string) {
 	delete(a.dispatchers, addr)
 }
 
+// In the design of Associator, a dispatcher is typically a UDP conn
+// from server to clients.
+// A dispatcher receives UDP packets, look its src addr up in rawChanByAddr,
+// then dispatch the raw data to that channel. That is, multiple clients can send
+// UDP packets to one dispatcher. A dispatcher is used to send UDP packets back
+// to clients too.
 type udpDispatcher struct {
 	rawChanByAddr map[string]chan<- []byte
 	errChanByAddr map[string]chan<- error
@@ -253,7 +256,7 @@ func (d *udpDispatcher) subscribe(addr string, rawChan chan<- []byte, errChan ch
 	d.mux.Lock()
 	defer d.mux.Unlock()
 
-	if d.rawChanByAddr == nil || d.errChanByAddr == nil {
+	if d.rawChanByAddr == nil {
 		d.rawChanByAddr = make(map[string]chan<- []byte)
 		d.errChanByAddr = make(map[string]chan<- error)
 	} else if _, ok := d.rawChanByAddr[addr]; ok {
@@ -282,8 +285,13 @@ func (d *udpDispatcher) WriteTo(b []byte, addr net.Addr) (int, error) {
 
 func (d *udpDispatcher) closeNoLock(err error) {
 	d.assoc.deregisterNoLock(d.conn.LocalAddr().String())
-	for _, errChan := range d.errChanByAddr {
-		errChan <- err
+	if err != nil {
+		for _, errChan := range d.errChanByAddr {
+			select {
+			case errChan <- err:
+			default:
+			}
+		}
 	}
 	d.conn.Close()
 	return
@@ -293,6 +301,7 @@ func (d *udpDispatcher) run() {
 	d.mux.Lock()
 	if d.rawChanByAddr == nil {
 		d.rawChanByAddr = make(map[string]chan<- []byte)
+		d.errChanByAddr = make(map[string]chan<- error)
 	}
 	d.mux.Unlock()
 
@@ -301,27 +310,22 @@ func (d *udpDispatcher) run() {
 		n, addr, err := d.conn.ReadFromUDPAddrPort(buffer)
 
 		d.mux.RLock()
-		for cAddr, ch := range d.rawChanByAddr {
-			if n == 0 {
-				break
-			}
-			if addr.String() == cAddr {
-				select {
-				case ch <- buffer[:n]:
-				default:
-				}
-				break
-			}
-		}
+    if n > 0 {
+      ch := d.rawChanByAddr[addr.String()]
+      if ch != nil {
+        select {
+        case ch <- buffer[:n]:
+        default:
+        }
+      }
+    }
+		d.mux.RUnlock()
 
 		if err != nil {
-			d.mux.RUnlock()
 			d.mux.Lock()
 			defer d.mux.Unlock()
 			d.closeNoLock(err)
 			return
 		}
-
-		d.mux.RUnlock()
 	}
 }

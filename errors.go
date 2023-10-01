@@ -45,6 +45,11 @@ func (e CmdNotSupportedError) Is(target error) bool {
 	return target == ErrMalformed
 }
 
+// Unwrap returns [errors.ErrUnsupported].
+func (e CmdNotSupportedError) Unwrap() error {
+  return errors.ErrUnsupported
+}
+
 type ATYPNotSupportedError byte
 
 func (e ATYPNotSupportedError) Error() string {
@@ -54,6 +59,11 @@ func (e ATYPNotSupportedError) Error() string {
 // Is returns true if target is [ErrMalformed].
 func (e ATYPNotSupportedError) Is(target error) bool {
 	return target == ErrMalformed
+}
+
+// Unwrap returns [errors.ErrUnsupported].
+func (e ATYPNotSupportedError) Unwrap() error {
+  return errors.ErrUnsupported
 }
 
 // ErrAcceptOrDenyFailed is used by [Connect], [Binder] and [Associator].

@@ -79,9 +79,12 @@ type MidLayer struct {
 // If a connection has failed to close,
 // ml won't try to close it next time.
 // errs contain errors returned by [net.Conn.Close].
-func (ml *MidLayer) Close() (errs []error) {
+//
+// If errors occur, Close joins them with [errors.Join] and return the result. 
+func (ml *MidLayer) Close() error {
 	ml.mux.Lock()
 	defer ml.mux.Unlock()
+  errs := make([]error, 0, 4)
 	ml.info(newOpErr("closing all connections", nil, nil))
 	for c := range ml.conns {
 		ml.info(newOpErr("connection close", c, nil))
@@ -92,7 +95,7 @@ func (ml *MidLayer) Close() (errs []error) {
 		}
 		ml.delConnNoLock(c)
 	}
-	return
+	return errors.Join(errs...)
 }
 
 func (ml *MidLayer) regConn(c net.Conn) {
