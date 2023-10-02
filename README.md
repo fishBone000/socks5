@@ -35,4 +35,7 @@ For details, see the Go reference.
 - I will be busy for quite a long time, expect less maintanence. 
 - The error and log util of the MidLayer might be...a little poorly designed. 
 Post issue if you think changes are necessary. 
-- Socksy5 is my first public library, it is (not yet) tested, but there might still be some bugs. 
+- Another private project of mine relies on this module, so socksy5 is tested (not yet, the proj is not finished yet), in some ways. 
+However it's my first public library, so expect bugs and weird design.
+I did review the code several times though!
+- For example, the Capsulator in this package, shouldn't probably be like a ReadWriter, but sth else. 
