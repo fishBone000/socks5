@@ -63,7 +63,7 @@ func parseUint16(str string) (i uint16, err error) {
 	if err != nil {
 		return
 	}
-	if d < 0x00 || d > 0xFF {
+	if d < 0x00 || d > 0xFFFF {
 		return 0, fmt.Errorf("%d is not uint16", d)
 	}
 	return uint16(d), err
