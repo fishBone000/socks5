@@ -3,6 +3,7 @@ package socksy5
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 )
 
@@ -171,6 +172,9 @@ type RelayError struct {
 }
 
 func newRelayErr(clientConn, hostConn net.Conn, chErr, hcErr error) *RelayError {
+	if errors.Is(chErr, io.EOF) && errors.Is(hcErr, io.EOF) {
+		return nil
+	}
 	return &RelayError{
 		ClientRemoteAddr: clientConn.RemoteAddr(),
 		ClientLocalAddr:  clientConn.LocalAddr(),

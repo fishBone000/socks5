@@ -2,7 +2,8 @@ package socksy5
 
 import "net"
 
-// Listen listens addr and pass connections to ml.
+// Listen listens addr and passes connections to ml.
+// Listen also blocks until any error occurs.
 //
 // addr can be a host name, in this case Listen will look it up
 // and listen on resolved IP addresses.

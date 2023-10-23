@@ -43,7 +43,6 @@ type Binder struct {
 // Handle will try to use one single system allocated port for all of them.
 //
 // Handle doesn't wait for the data transmission after the 2nd reply to finish.
-// If restrict is true, only inbound specified in the request will be accepted.
 //
 // timeout is disabled if it's 0.
 func (b *Binder) Handle(req *BindRequest, addr string, timeout time.Duration) error {
@@ -90,36 +89,36 @@ func (b *Binder) Handle(req *BindRequest, addr string, timeout time.Duration) er
 		conn = <-connChan
 		close(ready)
 	}()
-  err = nil
+	err = nil
 	for _, l := range dispatchers {
 		for _, ip := range dstIPs {
 			addr := net.JoinHostPort(ip.String(), port)
-      if existed := l.subscribe(addr, connChan, errChan); existed {
-        err = ErrDuplicatedRequest
-        continue
-      }
+			if existed := l.subscribe(addr, connChan, errChan); existed {
+				err = ErrDuplicatedRequest
+				continue
+			}
 			defer l.unsubscribe(addr)
 		}
 	}
 
-  if err != nil {
-    req.Deny(RepGeneralFailure, "")
-    return err
-  }
+	if err != nil {
+		req.Deny(RepGeneralFailure, "")
+		return err
+	}
 
 	if ok := req.Accept(net.JoinHostPort(b.Hostname, port)); !ok {
 		return ErrAcceptOrDenyFailed
 	}
 
-  err = nil
+	err = nil
 	select {
 	case <-cancel:
-    err = os.ErrDeadlineExceeded
-  case err = <-errChan:
+		err = os.ErrDeadlineExceeded
+	case err = <-errChan:
 	case <-ready:
 	}
 
-  if err != nil {
+	if err != nil {
 		go func() {
 			<-ready
 			if conn != nil {
@@ -127,8 +126,8 @@ func (b *Binder) Handle(req *BindRequest, addr string, timeout time.Duration) er
 			}
 		}()
 		req.Deny(RepGeneralFailure, "")
-    return err
-  }
+		return err
+	}
 
 	if ok := req.Bind(conn); !ok {
 		return ErrAcceptOrDenyFailed
@@ -217,12 +216,12 @@ type tcpDispatcher struct {
 func (d *tcpDispatcher) subscribe(addr string, connChan chan<- net.Conn, errChan chan<- error) (existed bool) {
 	d.mux.Lock()
 	defer d.mux.Unlock()
-  if ch := d.connChanByAddr[addr]; ch != nil {
-    return true
-  }
+	if ch := d.connChanByAddr[addr]; ch != nil {
+		return true
+	}
 	d.connChanByAddr[addr] = connChan
 	d.errChanByAddr[addr] = errChan
-  return false
+	return false
 }
 
 func (d *tcpDispatcher) unsubscribe(addr string) {
@@ -231,7 +230,7 @@ func (d *tcpDispatcher) unsubscribe(addr string) {
 	delete(d.connChanByAddr, addr)
 	delete(d.errChanByAddr, addr)
 	if len(d.connChanByAddr) == 0 {
-    d.listener.Close()
+		d.listener.Close()
 		delete(d.binder.dispatchers, d.listener.Addr().String())
 	}
 }

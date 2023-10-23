@@ -57,90 +57,90 @@ func (e *LogEntry) String() string {
 }
 
 func (ml *MidLayer) sendLog(l LogEntry) {
-	ml.mux.Lock()
-	defer ml.mux.Unlock()
+	ml.logChanMux.Lock()
+	defer ml.logChanMux.Unlock()
 	select {
 	case ml.logChan <- l:
 	default:
 	}
 }
 
-func (s *MidLayer) dbg(e error, a ...any) {
+func (ml *MidLayer) dbg(e error, a ...any) {
 	log := LogEntry{
 		Time:     time.Now(),
 		Severity: SeverityDebug,
 		Err:      err(e, a...),
 	}
-	s.sendLog(log)
+	ml.sendLog(log)
 }
 
-func (s *MidLayer) dbgv(e error, a ...any) {
+func (ml *MidLayer) dbgv(e error, a ...any) {
 	log := LogEntry{
 		Time:      time.Now(),
 		Severity:  SeverityDebug,
 		Verbosity: 1,
 		Err:       err(e, a...),
 	}
-	s.sendLog(log)
+	ml.sendLog(log)
 }
 
-func (s *MidLayer) dbgvv(e error, a ...any) {
+func (ml *MidLayer) dbgvv(e error, a ...any) {
 	log := LogEntry{
 		Time:      time.Now(),
 		Severity:  SeverityDebug,
 		Verbosity: 2,
 		Err:       err(e, a...),
 	}
-	s.sendLog(log)
+	ml.sendLog(log)
 }
 
-func (s *MidLayer) dbgNonNil(e error, a ...any) {
+func (ml *MidLayer) dbgNonNil(e error, a ...any) {
 	if e != nil {
-		s.dbg(e, a...)
+		ml.dbg(e, a...)
 	}
 }
 
-func (s *MidLayer) info(e error, a ...any) {
+func (ml *MidLayer) info(e error, a ...any) {
 	log := LogEntry{
 		Time:     time.Now(),
 		Severity: SeverityInfo,
 		Err:      err(e, a...),
 	}
-	s.sendLog(log)
+	ml.sendLog(log)
 }
 
-func (s *MidLayer) infoNonNil(e error, a ...any) {
+func (ml *MidLayer) infoNonNil(e error, a ...any) {
 	if e != nil {
-		s.info(e, a...)
+		ml.info(e, a...)
 	}
 }
 
-func (s *MidLayer) warn(e error, a ...any) {
+func (ml *MidLayer) warn(e error, a ...any) {
 	log := LogEntry{
 		Time:     time.Now(),
 		Severity: SeverityWarning,
 		Err:      err(e, a...),
 	}
-	s.sendLog(log)
+	ml.sendLog(log)
 }
 
-func (s *MidLayer) warnNonNil(e error, a ...any) {
+func (ml *MidLayer) warnNonNil(e error, a ...any) {
 	if e != nil {
-		s.warn(e, a...)
+		ml.warn(e, a...)
 	}
 }
 
-func (s *MidLayer) err(e error, a ...any) {
+func (ml *MidLayer) err(e error, a ...any) {
 	log := LogEntry{
 		Time:     time.Now(),
 		Severity: SeverityError,
 		Err:      err(e, a...),
 	}
-	s.sendLog(log)
+	ml.sendLog(log)
 }
 
-func (s *MidLayer) errNonNil(e error, a ...any) {
+func (ml *MidLayer) errNonNil(e error, a ...any) {
 	if e != nil {
-		s.err(e, a...)
+		ml.err(e, a...)
 	}
 }

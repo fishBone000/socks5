@@ -648,9 +648,8 @@ func (r *AssocRequest) Accept(addr string, notify func(reason error)) (terminate
 func (r *AssocRequest) accept(addr *AddrPort, notify func(error)) (terminate func() error, ok bool) {
 	r.once.Do(func() {
 		r.notify = notify
-
+		r.reply.addr = addr
 		terminate = r.terminate
-
 		ok = true
 		r.wg.Done()
 	})

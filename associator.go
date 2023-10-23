@@ -25,9 +25,9 @@ type Associator struct {
 
 // Handle handles the UDP ASSOCIATE request req.
 //
-// addr is the address that a will listen for UDP packets from the client 
-// and send UDP packets to the client. 
-// It can be empty, 
+// addr is the address that a will listen for UDP packets from the client
+// and send UDP packets to the client.
+// It can be empty,
 // in that case a will use all zero addresses with a system allocated port.
 // If the host part in addr is a host name, Handle will look it up and listen
 // on all of the resulting IP addresses. If the port in addr is 0,
@@ -62,22 +62,22 @@ func (a *Associator) Handle(req *AssocRequest, addr string) error {
 
 	rawChan := make(chan []byte, 32)
 	errChan := make(chan error)
-  err = nil
+	err = nil
 	for _, d := range ds {
-    for _, ip := range dstIPs {
-      existed := d.subscribe(net.JoinHostPort(ip.String(), strconv.Itoa(int(req.Dst().Port))), rawChan, errChan)
-      if existed {
-        err = ErrDuplicatedRequest
-        continue
-      }
-      defer d.unsubscribe(req.Dst().String())
-    }
+		for _, ip := range dstIPs {
+			existed := d.subscribe(net.JoinHostPort(ip.String(), strconv.Itoa(int(req.Dst().Port))), rawChan, errChan)
+			if existed {
+				err = ErrDuplicatedRequest
+				continue
+			}
+			defer d.unsubscribe(req.Dst().String())
+		}
 	}
 
-  if err != nil {
-    req.Deny(RepGeneralFailure, "")
-    return err
-  }
+	if err != nil {
+		req.Deny(RepGeneralFailure, "")
+		return err
+	}
 
 	_, port, err := net.SplitHostPort(ds[0].conn.LocalAddr().String())
 	if err != nil {

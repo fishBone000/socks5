@@ -68,6 +68,7 @@ const (
 type MidLayer struct {
 	mux         sync.Mutex
 	logChan     chan LogEntry
+	logChanMux  sync.Mutex
 	hndshkChan  chan *Handshake
 	requestChan chan any
 	conns       map[net.Conn]struct{}
@@ -80,11 +81,11 @@ type MidLayer struct {
 // ml won't try to close it next time.
 // errs contain errors returned by [net.Conn.Close].
 //
-// If errors occur, Close joins them with [errors.Join] and return the result. 
+// If errors occur, Close joins them with [errors.Join] and return the result.
 func (ml *MidLayer) Close() error {
 	ml.mux.Lock()
 	defer ml.mux.Unlock()
-  errs := make([]error, 0, 4)
+	errs := make([]error, 0, 4)
 	ml.info(newOpErr("closing all connections", nil, nil))
 	for c := range ml.conns {
 		ml.info(newOpErr("connection close", c, nil))
@@ -133,10 +134,12 @@ func (ml *MidLayer) closeConn(c net.Conn) error {
 	if c == nil {
 		return nil
 	}
-	ml.info(newOpErr("connection close", c, nil))
+
 	err := c.Close()
-	if err != nil {
+	if err != nil && !errors.Is(err, net.ErrClosed) {
 		ml.warn(newOpErr("close connection", c, err))
+	} else {
+		ml.info(newOpErr("connection close", c, nil))
 	}
 	ml.delConn(c)
 	return err
@@ -182,11 +185,6 @@ func (ml *MidLayer) RequestChan() <-chan any {
 }
 
 // ServeClient starts serving the client and blocks til finish.
-//
-// Note that if the client sends CONNECT or BIND request, even if the request is
-// accepted and the TCP traffic relaying is successful
-// (one of the connections closed normally),
-// a [RelayError] is still returned.
 func (ml *MidLayer) ServeClient(conn net.Conn) error { // TODO Check compability with net.Conn (nil addr etc)
 	ml.info(newOpErr("new connection", conn, nil))
 	hs, rerr := readHandshake(conn)
@@ -202,7 +200,7 @@ func (ml *MidLayer) ServeClient(conn net.Conn) error { // TODO Check compability
 	hs.raddr = conn.RemoteAddr()
 	ml.regConn(conn)
 	uuid := uuid.New()
-	ml.dbg(newOpErr("assigned session with UUID"+uuid.String(), conn, nil))
+	ml.dbg(newOpErr("assigned session with UUID "+uuid.String(), conn, nil))
 	hs.uuid = uuid
 
 	ml.dbgv(newOpErr(
@@ -452,10 +450,16 @@ func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) *Rel
 
 	go func() {
 		_, hcErr = io.Copy(capper, hostConn)
+		if c, ok := clientConn.(interface{ CloseWrite() error }); ok {
+			ml.closeWrite(c)
+		}
 		wg.Done()
 	}()
 	go func() {
 		_, chErr = io.Copy(hostConn, capper)
+		if c, ok := clientConn.(interface{ CloseWrite() error }); ok {
+			ml.closeWrite(c)
+		}
 		wg.Done()
 	}()
 	wg.Wait()
@@ -470,9 +474,16 @@ func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) *Rel
 	ml.closeConn(clientConn)
 	ml.closeConn(hostConn)
 
-	// I know that even if one of the 2 conns closed normally, MidLayer will still
-	// complain about it...But I have no better idea for now.
-	err := newRelayErr(clientConn, hostConn, chErr, hcErr)
-	ml.err(err)
-	return err
+	if err := newRelayErr(clientConn, hostConn, chErr, hcErr); err != nil {
+		ml.err(err)
+		return err
+	}
+	return nil
+}
+
+func (ml *MidLayer) closeWrite(conn interface{ CloseWrite() error }) {
+	if err := conn.CloseWrite(); err != nil && err != net.ErrClosed {
+		ml.warn(newOpErr("close write end", conn, err))
+	}
+	ml.info(newOpErr("close write end", conn, nil))
 }
