@@ -1,4 +1,3 @@
-# Under Test, Preview ONLY, Will Be Out SOON
 # SOCKSY5
 Socksy5 provides a Golang SOCKS5 middle layer that handle communication with clients 
 for you, but let you to do decision on what to do with the handshakes and requests. 
@@ -34,7 +33,7 @@ For details, see the Go reference.
 - Issues, suggestions and PRs welcome
 - I will be busy for quite a long time, expect less maintanence. 
 - It's still in unstable release, expect:
--- Weird error and log util design
---- If you have better ideas, submit issues!
--- Potential bugs
---- I use a SOCKS5 proxy which is based on socksy5 for daily use, so it's not...that buggy. 
+ - Weird error and log util design
+  - If you have better ideas, submit issues!
+ - Potential bugs
+  - I use a SOCKS5 proxy which is based on socksy5 for daily use, so it's not...that buggy. 
