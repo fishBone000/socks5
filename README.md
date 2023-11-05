@@ -1,3 +1,5 @@
+[![Go Reference](https://pkg.go.dev/badge/github.com/fishBone000/socksy5.svg)](https://pkg.go.dev/github.com/fishBone000/socksy5)
+
 # SOCKSY5
 Socksy5 provides a Golang SOCKS5 middle layer that handle communication with clients 
 for you, but let you to do decision on what to do with the handshakes and requests. 
