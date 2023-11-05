@@ -33,9 +33,8 @@ For details, see the Go reference.
 ## Note
 - Issues, suggestions and PRs welcome
 - I will be busy for quite a long time, expect less maintanence. 
-- The error and log util of the MidLayer might be...a little poorly designed. 
--- Post issue if you think changes are necessary. 
-- Another private project of mine relies on this module
--- so socksy5 is tested (not yet, the proj is not finished yet), in some ways. 
--- However it's my first public library, so expect bugs and weird design.
--- For example, the Capsulator in this package, shouldn't probably be like a ReadWriter, but sth else. 
+- It's still in unstable release, expect:
+-- Weird error and log util design
+--- If you have better ideas, submit issues!
+-- Potential bugs
+--- I use a SOCKS5 proxy which is based on socksy5 for daily use, so it's not...that buggy. 
