@@ -457,7 +457,7 @@ func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) *Rel
 	}()
 	go func() {
 		_, chErr = io.Copy(hostConn, capper)
-		if c, ok := clientConn.(interface{ CloseWrite() error }); ok {
+		if c, ok := hostConn.(interface{ CloseWrite() error }); ok {
 			ml.closeWrite(c)
 		}
 		wg.Done()
@@ -484,6 +484,7 @@ func (ml *MidLayer) relay(capper Capsulator, clientConn, hostConn net.Conn) *Rel
 func (ml *MidLayer) closeWrite(conn interface{ CloseWrite() error }) {
 	if err := conn.CloseWrite(); err != nil && err != net.ErrClosed {
 		ml.warn(newOpErr("close write end", conn, err))
+	} else {
+		ml.info(newOpErr("close write end", conn, nil))
 	}
-	ml.info(newOpErr("close write end", conn, nil))
 }
