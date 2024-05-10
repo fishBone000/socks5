@@ -1,4 +1,4 @@
-module github.com/fishBone000/socksy5
+module github.com/fishBone000/socks5
 
 go 1.21.0
 

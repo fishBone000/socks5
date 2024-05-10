@@ -1,8 +1,10 @@
-[![Go Reference](https://pkg.go.dev/badge/github.com/fishBone000/socksy5.svg)](https://pkg.go.dev/github.com/fishBone000/socksy5)
+[![Go Reference](https://pkg.go.dev/badge/github.com/fishBone000/socks5.svg)](https://pkg.go.dev/github.com/fishBone000/socks5)
 
 # SOCKSY5
 Socksy5 provides a Golang SOCKS5 middle layer that handle communication with clients 
-for you, but let you to do decision on what to do with the handshakes and requests. 
+for you, but let you to do decision on what to do with the handshakes and requests.  
+Yes, the repo name and package name differ. They used to be the same, 
+but the repo name was changed to fit Go's package search engine.
 
 ### What the middle layer does: 
 - Reading requests and sending replies
@@ -33,9 +35,7 @@ For details, see the Go reference.
 
 ## Note
 - Issues, suggestions and PRs welcome
-- I will be busy for quite a long time, expect less maintanence. 
+- I will be busy for months, expect less maintanence. 
 - It's still in unstable release, expect:
   - Weird error and log util design
     - If you have better ideas, submit issues!
-  - Potential bugs
-    - I use a SOCKS5 proxy which is based on socksy5 for daily use, so it's not...that buggy. 
